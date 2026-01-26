@@ -23,11 +23,19 @@ function readServiceAccount() {
     throw new Error("Missing GOOGLE_CLIENT_EMAIL / GOOGLE_PRIVATE_KEY");
   }
 
-  // Vercel often stores multiline keys with \n
-  privateKey = privateKey.replace(/\\n/g, "\n").replace(/\r\n/g, "\n");
+  privateKey = privateKey
+    .replace(/\\n/g, "\n")     // if stored with \n
+    .replace(/\r\n/g, "\n")    // windows newlines
+    .trim();
+
+  // Safety: remove accidental surrounding quotes
+  if (privateKey.startsWith('"') && privateKey.endsWith('"')) {
+    privateKey = privateKey.slice(1, -1);
+  }
 
   return { clientEmail, privateKey };
 }
+
 
 async function getSheetsClient() {
   const { clientEmail, privateKey } = readServiceAccount();
