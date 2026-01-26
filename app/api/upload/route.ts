@@ -1,7 +1,5 @@
 import { NextResponse } from "next/server";
 import { google } from "googleapis";
-import fs from "fs";
-import path from "path";
 import { Readable } from "stream";
 import sgMail from "@sendgrid/mail";
 
@@ -37,13 +35,22 @@ function weekFolderName(date: Date) {
 
 // ---------- Google clients ----------
 function readServiceAccount() {
-  const keyPath = path.join(process.cwd(), "credentials", "service-account.json");
-  const keyJson = JSON.parse(fs.readFileSync(keyPath, "utf8"));
-  const clientEmail = keyJson.client_email as string | undefined;
-  const privateKey = keyJson.private_key as string | undefined;
-  if (!clientEmail || !privateKey) throw new Error("service-account.json missing client_email/private_key");
+  const clientEmail = process.env.GOOGLE_CLIENT_EMAIL;
+  let privateKey = process.env.GOOGLE_PRIVATE_KEY;
+
+  if (!clientEmail || !privateKey) {
+    throw new Error("Missing GOOGLE_CLIENT_EMAIL / GOOGLE_PRIVATE_KEY");
+  }
+
+  // Handles env vars stored as single line with \n and Windows newlines
+  privateKey = privateKey
+    .replace(/\\n/g, "\n")
+    .replace(/\r\n/g, "\n")
+    .trim();
+
   return { clientEmail, privateKey };
 }
+
 
 async function getDriveClient() {
   const { clientEmail, privateKey } = readServiceAccount();

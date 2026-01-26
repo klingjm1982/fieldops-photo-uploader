@@ -24,7 +24,7 @@ function readServiceAccount() {
   }
 
   // Vercel often stores multiline keys with \n
-  privateKey = privateKey.replace(/\\n/g, "\n");
+  privateKey = privateKey.replace(/\\n/g, "\n").replace(/\r\n/g, "\n");
 
   return { clientEmail, privateKey };
 }
