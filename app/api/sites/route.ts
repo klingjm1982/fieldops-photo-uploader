@@ -61,7 +61,7 @@ async function getSheetsClient() {
 export async function GET() {
   try {
     const sheetId = process.env.GOOGLE_SHEET_ID;
-    const tab = process.env.GOOGLE_SHEET_TAB || "Sheet1";
+    const tab = process.env.GOOGLE_SHEET_TAB || "Sites";
 
     if (!sheetId) {
       return NextResponse.json({ error: "Missing GOOGLE_SHEET_ID" }, { status: 500 });
