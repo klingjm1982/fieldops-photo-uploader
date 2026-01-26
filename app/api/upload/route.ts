@@ -42,14 +42,19 @@ function readServiceAccount() {
     throw new Error("Missing GOOGLE_CLIENT_EMAIL / GOOGLE_PRIVATE_KEY");
   }
 
-  // Handles env vars stored as single line with \n and Windows newlines
   privateKey = privateKey
-    .replace(/\\n/g, "\n")
-    .replace(/\r\n/g, "\n")
+    .replace(/\\n/g, "\n")     // if stored with \n
+    .replace(/\r\n/g, "\n")    // windows newlines
     .trim();
+
+  // Safety: remove accidental surrounding quotes
+  if (privateKey.startsWith('"') && privateKey.endsWith('"')) {
+    privateKey = privateKey.slice(1, -1);
+  }
 
   return { clientEmail, privateKey };
 }
+
 
 
 async function getDriveClient() {
