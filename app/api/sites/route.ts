@@ -1,7 +1,5 @@
 import { NextResponse } from "next/server";
 import { google } from "googleapis";
-import fs from "fs";
-import path from "path";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -11,8 +9,38 @@ type Site = {
   displayName: string;
   address?: string;
   folderId?: string;
+
+  // Optional extras (your UI can ignore these)
+  active?: boolean;
+  market?: string;
 };
 
+function readServiceAccount() {
+  const clientEmail = process.env.GOOGLE_CLIENT_EMAIL;
+  let privateKey = process.env.GOOGLE_PRIVATE_KEY;
+
+  if (!clientEmail || !privateKey) {
+    throw new Error("Missing GOOGLE_CLIENT_EMAIL / GOOGLE_PRIVATE_KEY");
+  }
+
+  // Vercel often stores multiline keys with \n
+  privateKey = privateKey.replace(/\\n/g, "\n");
+
+  return { clientEmail, privateKey };
+}
+
+async function getSheetsClient() {
+  const { clientEmail, privateKey } = readServiceAccount();
+
+  const auth = new google.auth.JWT({
+    email: clientEmail,
+    key: privateKey,
+    scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
+  });
+
+  await auth.authorize();
+  return google.sheets({ version: "v4", auth });
+}
 
 export async function GET() {
   try {
@@ -23,29 +51,9 @@ export async function GET() {
       return NextResponse.json({ error: "Missing GOOGLE_SHEET_ID" }, { status: 500 });
     }
 
-    const keyPath = path.join(process.cwd(), "credentials", "service-account.json");
-    const keyJson = JSON.parse(fs.readFileSync(keyPath, "utf8"));
+    const sheets = await getSheetsClient();
 
-    const clientEmail = keyJson.client_email as string | undefined;
-    const privateKey = keyJson.private_key as string | undefined;
-
-    if (!clientEmail || !privateKey) {
-      return NextResponse.json(
-        { error: "service-account.json missing client_email/private_key" },
-        { status: 500 }
-      );
-    }
-
-    const auth = new google.auth.JWT({
-      email: clientEmail,
-      key: privateKey,
-      scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
-    });
-
-    await auth.authorize();
-
-    const sheets = google.sheets({ version: "v4", auth });
-
+    // A: Address, B: FolderId, C: Active (Y/N), D: Market
     const resp = await sheets.spreadsheets.values.get({
       spreadsheetId: sheetId,
       range: `${tab}!A2:D`,
@@ -57,17 +65,20 @@ export async function GET() {
       .filter((r) => Array.isArray(r) && r.length > 0)
       .map((r, i) => {
         const address = String(r[0] ?? "").trim();
-        const folderId = String(r[1] ?? "").trim(); // <-- Drive folder ID
-        const activeFlag = String(r[2] ?? "").trim().toUpperCase();
+        const folderId = String(r[1] ?? "").trim();
+        const activeFlag = String(r[2] ?? "").trim().toUpperCase(); // Y / N / blank
         const market = String(r[3] ?? "").trim();
 
+        const active = activeFlag ? activeFlag === "Y" : true;
+
         return {
-  siteId: folderId || `site-${i + 1}`,  // <-- use Drive folderId as the key
-  displayName: address,
-  address,
-  folderId,
-  active: activeFlag ? activeFlag === "Y" : true,
-};
+          siteId: folderId || `site-${i + 1}`, // prefer folderId as the key
+          displayName: address,
+          address,
+          folderId,
+          active,
+          market,
+        };
       })
       .filter((s) => s.displayName && s.folderId)
       .filter((s) => s.active !== false);
@@ -81,3 +92,4 @@ export async function GET() {
     );
   }
 }
+
