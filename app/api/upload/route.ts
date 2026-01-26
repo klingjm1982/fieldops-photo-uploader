@@ -5,8 +5,8 @@ import path from "path";
 import { Readable } from "stream";
 import sgMail from "@sendgrid/mail";
 
-export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 // ---------- Email helper (SendGrid) ----------
 async function sendUploadEmail(params: { to: string; from: string; subject: string; text: string }) {
