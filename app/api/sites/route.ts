@@ -15,6 +15,14 @@ type Site = {
   market?: string;
 };
 
+const pk = process.env.GOOGLE_PRIVATE_KEY || "";
+console.log("PK sanity", {
+  len: pk.length,
+  hasBegin: pk.includes("BEGIN PRIVATE KEY"),
+  hasEnd: pk.includes("END PRIVATE KEY"),
+  hasBackslashN: pk.includes("\\n"),
+});
+
 function readServiceAccount() {
   const clientEmail = process.env.GOOGLE_CLIENT_EMAIL;
   let privateKey = process.env.GOOGLE_PRIVATE_KEY;
