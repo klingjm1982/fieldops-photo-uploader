@@ -1,0 +1,438 @@
+import { google, sheets_v4 } from "googleapis";
+import { readServiceAccount } from "@/app/lib/googleServiceAccount";
+
+export type CorrigoWorkOrder = {
+  month: string;
+  siteId: string;
+  address: string;
+  workOrderNumber: string;
+  active: boolean;
+  notes: string;
+};
+
+export type CorrigoQueueRow = {
+  queueId: string;
+  month: string;
+  siteId: string;
+  address: string;
+  serviceDate: string;
+  workOrderNumber: string;
+  uploadTimestamp: string;
+  photoCount: number;
+  driveLinks: string;
+  originalFilenames: string;
+  status: string;
+  attempts: number;
+  lastError: string;
+  uploadedAt: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type UploadGroup = {
+  month: string;
+  siteId: string;
+  address: string;
+  serviceDate: string;
+  uploadTimestamp: string;
+  photoCount: number;
+  driveLinks: string[];
+  originalFilenames: string[];
+};
+
+const WORK_ORDERS_TAB = "CorrigoWorkOrders";
+const QUEUE_TAB = "CorrigoUploadQueue";
+const UPLOADS_TAB = process.env.GOOGLE_UPLOADS_TAB || "UploadsLog";
+
+const WORK_ORDER_HEADERS = [
+  "month",
+  "siteId",
+  "address",
+  "workOrderNumber",
+  "active",
+  "notes",
+];
+
+const QUEUE_HEADERS = [
+  "queueId",
+  "month",
+  "siteId",
+  "address",
+  "serviceDate",
+  "workOrderNumber",
+  "uploadTimestamp",
+  "photoCount",
+  "driveLinks",
+  "originalFilenames",
+  "status",
+  "attempts",
+  "lastError",
+  "uploadedAt",
+  "createdAt",
+  "updatedAt",
+];
+
+async function getSheetsClient() {
+  const { clientEmail, privateKey } = readServiceAccount();
+  const auth = new google.auth.JWT({
+    email: clientEmail,
+    key: privateKey,
+    scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+  });
+  await auth.authorize();
+  return google.sheets({ version: "v4", auth });
+}
+
+function spreadsheetId() {
+  const id = process.env.GOOGLE_SHEET_ID;
+  if (!id) throw new Error("Missing GOOGLE_SHEET_ID");
+  return id;
+}
+
+function normalizeHeader(value: unknown) {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+}
+
+function headerIndex(headers: unknown[], names: string[], fallback: number) {
+  const normalized = headers.map(normalizeHeader);
+  const wanted = names.map(normalizeHeader);
+  const index = normalized.findIndex((h) => wanted.includes(h));
+  return index >= 0 ? index : fallback;
+}
+
+function hasHeader(headers: unknown[], names: string[]) {
+  const normalized = headers.map(normalizeHeader);
+  const wanted = names.map(normalizeHeader);
+  return normalized.some((h) => wanted.includes(h));
+}
+
+function cell(row: unknown[], index: number) {
+  if (index < 0) return "";
+  return String(row[index] ?? "").trim();
+}
+
+function parseActive(value: string) {
+  if (!value) return true;
+  return !["n", "no", "false", "inactive", "0"].includes(value.toLowerCase());
+}
+
+function parseNumber(value: string) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function localDateParts(value: string, timeZone: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+
+  const year = parts.find((p) => p.type === "year")?.value;
+  const month = parts.find((p) => p.type === "month")?.value;
+  const day = parts.find((p) => p.type === "day")?.value;
+
+  if (!year || !month || !day) return null;
+  return { month: `${year}-${month}`, date: `${year}-${month}-${day}` };
+}
+
+function currentMonth(timeZone: string) {
+  const now = new Date();
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+  }).formatToParts(now);
+  const year = parts.find((p) => p.type === "year")?.value;
+  const month = parts.find((p) => p.type === "month")?.value;
+  return `${year}-${month}`;
+}
+
+function queueIdFor(group: UploadGroup, workOrderNumber: string) {
+  return [group.month, group.siteId, group.serviceDate, workOrderNumber].join("__");
+}
+
+function splitLines(value: string) {
+  return value
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+async function ensureSheet(sheets: sheets_v4.Sheets, title: string, headers: string[]) {
+  const id = spreadsheetId();
+  const meta = await sheets.spreadsheets.get({
+    spreadsheetId: id,
+    fields: "sheets.properties.title",
+  });
+  const exists = meta.data.sheets?.some((s) => s.properties?.title === title);
+
+  if (!exists) {
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: id,
+      requestBody: {
+        requests: [{ addSheet: { properties: { title } } }],
+      },
+    });
+  }
+
+  const current = await sheets.spreadsheets.values.get({
+    spreadsheetId: id,
+    range: `${title}!A1:Z1`,
+  });
+
+  if ((current.data.values ?? []).length === 0) {
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: id,
+      range: `${title}!A1:${String.fromCharCode(64 + headers.length)}1`,
+      valueInputOption: "USER_ENTERED",
+      requestBody: { values: [headers] },
+    });
+  }
+}
+
+async function readValues(sheets: sheets_v4.Sheets, tab: string) {
+  const resp = await sheets.spreadsheets.values.get({
+    spreadsheetId: spreadsheetId(),
+    range: `${tab}!A:Z`,
+  });
+  return resp.data.values ?? [];
+}
+
+function parseWorkOrders(rows: unknown[][]): CorrigoWorkOrder[] {
+  const [maybeHeaders = [], ...remainingRows] = rows;
+  const headers = hasHeader(maybeHeaders, ["workOrderNumber", "siteId", "month"])
+    ? maybeHeaders
+    : [];
+  const body = headers.length > 0 ? remainingRows : rows;
+  const monthIdx = headerIndex(headers, ["month"], 0);
+  const siteIdx = headerIndex(headers, ["siteId"], 1);
+  const addressIdx = headerIndex(headers, ["address"], 2);
+  const workOrderIdx = headerIndex(headers, ["workOrderNumber", "corrigoWorkOrderNumber"], 3);
+  const activeIdx = headerIndex(headers, ["active"], 4);
+  const notesIdx = headerIndex(headers, ["notes"], 5);
+
+  return body
+    .map((row) => ({
+      month: cell(row, monthIdx),
+      siteId: cell(row, siteIdx),
+      address: cell(row, addressIdx),
+      workOrderNumber: cell(row, workOrderIdx),
+      active: parseActive(cell(row, activeIdx)),
+      notes: cell(row, notesIdx),
+    }))
+    .filter((row) => row.month && row.siteId && row.workOrderNumber);
+}
+
+function parseQueue(rows: unknown[][]): CorrigoQueueRow[] {
+  const [maybeHeaders = [], ...remainingRows] = rows;
+  const headers = hasHeader(maybeHeaders, ["queueId", "workOrderNumber", "status"])
+    ? maybeHeaders
+    : [];
+  const body = headers.length > 0 ? remainingRows : rows;
+
+  return body
+    .map((row) => ({
+      queueId: cell(row, headerIndex(headers, ["queueId"], 0)),
+      month: cell(row, headerIndex(headers, ["month"], 1)),
+      siteId: cell(row, headerIndex(headers, ["siteId"], 2)),
+      address: cell(row, headerIndex(headers, ["address"], 3)),
+      serviceDate: cell(row, headerIndex(headers, ["serviceDate"], 4)),
+      workOrderNumber: cell(row, headerIndex(headers, ["workOrderNumber"], 5)),
+      uploadTimestamp: cell(row, headerIndex(headers, ["uploadTimestamp"], 6)),
+      photoCount: parseNumber(cell(row, headerIndex(headers, ["photoCount"], 7))),
+      driveLinks: cell(row, headerIndex(headers, ["driveLinks"], 8)),
+      originalFilenames: cell(row, headerIndex(headers, ["originalFilenames"], 9)),
+      status: cell(row, headerIndex(headers, ["status"], 10)) || "Pending Corrigo Upload",
+      attempts: parseNumber(cell(row, headerIndex(headers, ["attempts"], 11))),
+      lastError: cell(row, headerIndex(headers, ["lastError"], 12)),
+      uploadedAt: cell(row, headerIndex(headers, ["uploadedAt"], 13)),
+      createdAt: cell(row, headerIndex(headers, ["createdAt"], 14)),
+      updatedAt: cell(row, headerIndex(headers, ["updatedAt"], 15)),
+    }))
+    .filter((row) => row.queueId);
+}
+
+function parseUploadGroups(rows: unknown[][], timeZone: string, month: string) {
+  const [maybeHeaders = [], ...remainingRows] = rows;
+  const headers = hasHeader(maybeHeaders, ["timestamp", "timestampISO", "siteId"])
+    ? maybeHeaders
+    : [];
+  const body = headers.length > 0 ? remainingRows : rows;
+  const timestampIdx = headerIndex(headers, ["timestamp", "timestampISO", "uploadedAt"], 0);
+  const addressIdx = headerIndex(headers, ["address"], 1);
+  const siteIdx = headerIndex(headers, ["siteId"], 2);
+  const countIdx = headerIndex(headers, ["count", "fileCount", "driveFileId"], 5);
+  const linksIdx = headerIndex(headers, ["driveLinks", "driveLink"], 6);
+  const filenamesIdx = headerIndex(headers, ["originalFilenames", "originalFilename"], 7);
+  const groups = new Map<string, UploadGroup>();
+
+  for (const row of body) {
+    const timestamp = cell(row, timestampIdx);
+    const parts = localDateParts(timestamp, timeZone);
+    const siteId = cell(row, siteIdx);
+    if (!parts || parts.month !== month || !siteId) continue;
+
+    const key = `${parts.month}__${siteId}__${parts.date}`;
+    const existing = groups.get(key);
+    const countText = cell(row, countIdx);
+    const parsedCount = Number(countText.match(/\d+/)?.[0] ?? "0");
+    const links = splitLines(cell(row, linksIdx));
+    const filenames = splitLines(cell(row, filenamesIdx));
+
+    if (existing) {
+      existing.photoCount += parsedCount || links.length || filenames.length || 1;
+      existing.driveLinks.push(...links);
+      existing.originalFilenames.push(...filenames);
+      if (timestamp > existing.uploadTimestamp) existing.uploadTimestamp = timestamp;
+      continue;
+    }
+
+    groups.set(key, {
+      month: parts.month,
+      siteId,
+      address: cell(row, addressIdx),
+      serviceDate: parts.date,
+      uploadTimestamp: timestamp,
+      photoCount: parsedCount || links.length || filenames.length || 1,
+      driveLinks: links,
+      originalFilenames: filenames,
+    });
+  }
+
+  return Array.from(groups.values()).sort((a, b) =>
+    a.serviceDate.localeCompare(b.serviceDate) || a.address.localeCompare(b.address)
+  );
+}
+
+function queueRowToValues(row: CorrigoQueueRow) {
+  return [
+    row.queueId,
+    row.month,
+    row.siteId,
+    row.address,
+    row.serviceDate,
+    row.workOrderNumber,
+    row.uploadTimestamp,
+    row.photoCount,
+    row.driveLinks,
+    row.originalFilenames,
+    row.status,
+    row.attempts,
+    row.lastError,
+    row.uploadedAt,
+    row.createdAt,
+    row.updatedAt,
+  ];
+}
+
+export async function getCorrigoSyncState(monthParam?: string) {
+  const sheets = await getSheetsClient();
+  await ensureSheet(sheets, WORK_ORDERS_TAB, WORK_ORDER_HEADERS);
+  await ensureSheet(sheets, QUEUE_TAB, QUEUE_HEADERS);
+
+  const timeZone = process.env.SERVICE_TIME_ZONE || "America/Chicago";
+  const month = monthParam || currentMonth(timeZone);
+  const [workOrderRows, queueRows, uploadRows] = await Promise.all([
+    readValues(sheets, WORK_ORDERS_TAB),
+    readValues(sheets, QUEUE_TAB),
+    readValues(sheets, UPLOADS_TAB),
+  ]);
+
+  const workOrders = parseWorkOrders(workOrderRows);
+  const queue = parseQueue(queueRows);
+  const uploadGroups = parseUploadGroups(uploadRows, timeZone, month);
+  const activeWorkOrders = workOrders.filter((row) => row.month === month && row.active);
+  const activeSiteIds = new Set(activeWorkOrders.map((row) => row.siteId));
+  const queuedIds = new Set(queue.map((row) => row.queueId));
+  const queueCandidates = uploadGroups
+    .filter((group) => activeSiteIds.has(group.siteId))
+    .filter((group) => {
+      const workOrder = activeWorkOrders.find((row) => row.siteId === group.siteId);
+      return workOrder ? !queuedIds.has(queueIdFor(group, workOrder.workOrderNumber)) : false;
+    });
+
+  return {
+    month,
+    workOrders,
+    queue,
+    uploadGroups,
+    queueCandidates,
+  };
+}
+
+export async function addCorrigoWorkOrder(row: CorrigoWorkOrder) {
+  const sheets = await getSheetsClient();
+  await ensureSheet(sheets, WORK_ORDERS_TAB, WORK_ORDER_HEADERS);
+  await sheets.spreadsheets.values.append({
+    spreadsheetId: spreadsheetId(),
+    range: `${WORK_ORDERS_TAB}!A:F`,
+    valueInputOption: "USER_ENTERED",
+    insertDataOption: "INSERT_ROWS",
+    requestBody: {
+      values: [[row.month, row.siteId, row.address, row.workOrderNumber, row.active ? "Y" : "N", row.notes]],
+    },
+  });
+}
+
+export async function buildCorrigoQueue(monthParam?: string) {
+  const sheets = await getSheetsClient();
+  await ensureSheet(sheets, WORK_ORDERS_TAB, WORK_ORDER_HEADERS);
+  await ensureSheet(sheets, QUEUE_TAB, QUEUE_HEADERS);
+
+  const state = await getCorrigoSyncState(monthParam);
+  const now = new Date().toISOString();
+  const workOrderBySite = new Map(
+    state.workOrders
+      .filter((row) => row.month === state.month && row.active)
+      .map((row) => [row.siteId, row])
+  );
+  const existingQueueIds = new Set(state.queue.map((row) => row.queueId));
+  const rowsToAppend: CorrigoQueueRow[] = [];
+
+  for (const group of state.uploadGroups) {
+    const workOrder = workOrderBySite.get(group.siteId);
+    if (!workOrder) continue;
+
+    const queueId = queueIdFor(group, workOrder.workOrderNumber);
+    if (existingQueueIds.has(queueId)) continue;
+
+    rowsToAppend.push({
+      queueId,
+      month: group.month,
+      siteId: group.siteId,
+      address: group.address || workOrder.address,
+      serviceDate: group.serviceDate,
+      workOrderNumber: workOrder.workOrderNumber,
+      uploadTimestamp: group.uploadTimestamp,
+      photoCount: group.photoCount,
+      driveLinks: group.driveLinks.join("\n"),
+      originalFilenames: group.originalFilenames.join("\n"),
+      status: "Pending Corrigo Upload",
+      attempts: 0,
+      lastError: "",
+      uploadedAt: "",
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+
+  if (rowsToAppend.length > 0) {
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: spreadsheetId(),
+      range: `${QUEUE_TAB}!A:P`,
+      valueInputOption: "USER_ENTERED",
+      insertDataOption: "INSERT_ROWS",
+      requestBody: { values: rowsToAppend.map(queueRowToValues) },
+    });
+  }
+
+  return { created: rowsToAppend.length, rows: rowsToAppend };
+}
