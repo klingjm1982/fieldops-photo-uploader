@@ -1,4 +1,5 @@
 import { google, sheets_v4 } from "googleapis";
+import { parseCorrigoWorkOrderEmail } from "@/app/lib/corrigoEmailParser";
 import { readServiceAccount } from "@/app/lib/googleServiceAccount";
 
 export type CorrigoWorkOrder = {
@@ -38,6 +39,11 @@ type UploadGroup = {
   photoCount: number;
   driveLinks: string[];
   originalFilenames: string[];
+};
+
+type SiteMatch = {
+  siteId: string;
+  address: string;
 };
 
 const WORK_ORDERS_TAB = "CorrigoWorkOrders";
@@ -312,6 +318,65 @@ function parseUploadGroups(rows: unknown[][], timeZone: string, month: string) {
   );
 }
 
+function normalizeAddress(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/\b(united states|usa|us)\b/g, "")
+    .replace(/\b(street)\b/g, "st")
+    .replace(/\b(road)\b/g, "rd")
+    .replace(/\b(parkway)\b/g, "pkwy")
+    .replace(/\b(avenue)\b/g, "ave")
+    .replace(/\b(drive)\b/g, "dr")
+    .replace(/\b(north)\b/g, "n")
+    .replace(/\b(south)\b/g, "s")
+    .replace(/\b(east)\b/g, "e")
+    .replace(/\b(west)\b/g, "w")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+function parseSites(rows: unknown[][]): SiteMatch[] {
+  const [maybeHeaders = [], ...remainingRows] = rows;
+  const headers = hasHeader(maybeHeaders, ["address", "siteId", "folderId"]) ? maybeHeaders : [];
+  const body = headers.length > 0 ? remainingRows : rows;
+  const addressIdx = headerIndex(headers, ["address", "displayName", "siteAddress"], 0);
+  const folderIdx = headerIndex(headers, ["folderId", "addressFolderId", "driveFolderId"], 1);
+  const siteIdIdx = headerIndex(headers, ["siteId"], folderIdx);
+  const activeIdx = headerIndex(headers, ["active", "isActive"], 2);
+
+  return body
+    .map((row) => ({
+      siteId: cell(row, siteIdIdx) || cell(row, folderIdx),
+      address: cell(row, addressIdx),
+      active: parseActive(cell(row, activeIdx)),
+    }))
+    .filter((row) => row.siteId && row.address && row.active)
+    .map((row) => ({ siteId: row.siteId, address: row.address }));
+}
+
+async function readSites(sheets: sheets_v4.Sheets) {
+  const sitesTab = process.env.GOOGLE_SHEET_TAB || "Sites";
+  try {
+    return parseSites(await readValues(sheets, sitesTab));
+  } catch (error) {
+    if (sitesTab !== "Sheet1") throw error;
+    return parseSites(await readValues(sheets, "Sites"));
+  }
+}
+
+function findSiteByAddress(sites: SiteMatch[], address: string) {
+  const normalized = normalizeAddress(address);
+  return (
+    sites.find((site) => normalizeAddress(site.address) === normalized) ??
+    sites.find((site) => {
+      const siteAddress = normalizeAddress(site.address);
+      return siteAddress.includes(normalized) || normalized.includes(siteAddress);
+    }) ??
+    null
+  );
+}
+
 function queueRowToValues(row: CorrigoQueueRow) {
   return [
     row.queueId,
@@ -380,6 +445,38 @@ export async function addCorrigoWorkOrder(row: CorrigoWorkOrder) {
       values: [[row.month, row.siteId, row.address, row.workOrderNumber, row.active ? "Y" : "N", row.notes]],
     },
   });
+}
+
+export async function addCorrigoWorkOrderFromEmail(params: { subject: string; body: string }) {
+  const parsed = parseCorrigoWorkOrderEmail(params.subject, params.body);
+  if (!parsed.accepted) {
+    return { ok: false, parsed, message: parsed.reason };
+  }
+
+  const sheets = await getSheetsClient();
+  const sites = await readSites(sheets);
+  const match = findSiteByAddress(sites, parsed.siteAddress);
+
+  if (!match) {
+    return {
+      ok: false,
+      parsed,
+      message: "No matching site found for Site Address.",
+    };
+  }
+
+  await addCorrigoWorkOrder({
+    month: parsed.month,
+    siteId: match.siteId,
+    address: match.address,
+    workOrderNumber: parsed.workOrderNumber,
+    active: true,
+    notes: [parsed.customerName, parsed.propertyName, "Parsed from Corrigo email"]
+      .filter(Boolean)
+      .join(" | "),
+  });
+
+  return { ok: true, parsed, site: match };
 }
 
 export async function buildCorrigoQueue(monthParam?: string) {

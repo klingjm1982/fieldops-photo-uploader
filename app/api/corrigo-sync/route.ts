@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import {
+  addCorrigoWorkOrderFromEmail,
   addCorrigoWorkOrder,
   buildCorrigoQueue,
   getCorrigoSyncState,
@@ -53,6 +54,14 @@ export async function POST(req: Request) {
     if (action === "buildQueue") {
       const result = await buildCorrigoQueue(String(body.month ?? "").trim() || undefined);
       return NextResponse.json({ ok: true, ...result });
+    }
+
+    if (action === "parseEmail") {
+      const result = await addCorrigoWorkOrderFromEmail({
+        subject: String(body.subject ?? ""),
+        body: String(body.emailBody ?? ""),
+      });
+      return NextResponse.json(result, { status: result.ok ? 200 : 422 });
     }
 
     return NextResponse.json({ message: "Unknown action" }, { status: 400 });

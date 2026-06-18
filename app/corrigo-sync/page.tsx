@@ -77,6 +77,10 @@ export default function CorrigoSyncPage() {
     workOrderNumber: "",
     notes: "",
   });
+  const [emailForm, setEmailForm] = useState({
+    subject: "",
+    emailBody: "",
+  });
 
   const load = useCallback(async (nextMonth = month) => {
     try {
@@ -162,6 +166,36 @@ export default function CorrigoSyncPage() {
     }
   }
 
+  async function parseEmail(evt: React.FormEvent) {
+    evt.preventDefault();
+    try {
+      setSaving(true);
+      setMessage(null);
+      setError(null);
+      const res = await fetch("/api/corrigo-sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "parseEmail",
+          subject: emailForm.subject,
+          emailBody: emailForm.emailBody,
+        }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.message ?? `HTTP ${res.status}`);
+      setMessage(
+        `Parsed WO ${json.parsed?.workOrderNumber ?? ""} and matched ${json.site?.address ?? "site"}.`
+      );
+      setEmailForm({ subject: "", emailBody: "" });
+      await load(json.parsed?.month ?? month);
+      if (json.parsed?.month) setMonth(json.parsed.month);
+    } catch (err: unknown) {
+      setError(errorMessage(err) || "Failed to parse Corrigo email");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <main style={{ padding: 18, maxWidth: 1180, margin: "0 auto", color: "#172033" }}>
       <div style={{ display: "flex", gap: 12, alignItems: "baseline", flexWrap: "wrap" }}>
@@ -195,6 +229,30 @@ export default function CorrigoSyncPage() {
 
       {!loading && (
         <>
+          <section style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: 14, marginBottom: 16 }}>
+            <h2 style={{ fontSize: 18, margin: "0 0 10px" }}>Parse Corrigo Email</h2>
+            <form onSubmit={parseEmail} style={{ display: "grid", gap: 10 }}>
+              <input
+                value={emailForm.subject}
+                onChange={(e) => setEmailForm((current) => ({ ...current, subject: e.target.value }))}
+                placeholder='Subject: The new Scheduled work order #309250085 received from Driven Brands'
+                required
+                style={inputStyle}
+              />
+              <textarea
+                value={emailForm.emailBody}
+                onChange={(e) => setEmailForm((current) => ({ ...current, emailBody: e.target.value }))}
+                placeholder="Paste the Corrigo email body here. It must include Site Address and Problem = Landscape."
+                required
+                rows={8}
+                style={{ ...inputStyle, fontFamily: "Arial, Helvetica, sans-serif" }}
+              />
+              <button type="submit" disabled={saving} style={{ ...buttonStyle, maxWidth: 180 }}>
+                Parse Email
+              </button>
+            </form>
+          </section>
+
           <section style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: 14, marginBottom: 16 }}>
             <h2 style={{ fontSize: 18, margin: "0 0 10px" }}>Add Test Work Order</h2>
             <form
