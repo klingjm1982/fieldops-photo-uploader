@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { google } from "googleapis";
+import { readServiceAccount } from "@/app/lib/googleServiceAccount";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -13,37 +14,10 @@ type Site = {
   // Optional extras (your UI can ignore these)
   active?: boolean;
   market?: string;
+  clientName?: string;
+  subCompany?: string;
+  servicesPerMonth?: number;
 };
-
-const pk = process.env.GOOGLE_PRIVATE_KEY || "";
-console.log("PK sanity", {
-  len: pk.length,
-  hasBegin: pk.includes("BEGIN PRIVATE KEY"),
-  hasEnd: pk.includes("END PRIVATE KEY"),
-  hasBackslashN: pk.includes("\\n"),
-});
-
-function readServiceAccount() {
-  const clientEmail = process.env.GOOGLE_CLIENT_EMAIL;
-  let privateKey = process.env.GOOGLE_PRIVATE_KEY;
-
-  if (!clientEmail || !privateKey) {
-    throw new Error("Missing GOOGLE_CLIENT_EMAIL / GOOGLE_PRIVATE_KEY");
-  }
-
-  privateKey = privateKey
-    .replace(/\\n/g, "\n")     // if stored with \n
-    .replace(/\r\n/g, "\n")    // windows newlines
-    .trim();
-
-  // Safety: remove accidental surrounding quotes
-  if (privateKey.startsWith('"') && privateKey.endsWith('"')) {
-    privateKey = privateKey.slice(1, -1);
-  }
-
-  return { clientEmail, privateKey };
-}
-
 
 async function getSheetsClient() {
   const { clientEmail, privateKey } = readServiceAccount();
@@ -58,6 +32,40 @@ async function getSheetsClient() {
   return google.sheets({ version: "v4", auth });
 }
 
+function normalizeHeader(value: unknown) {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+}
+
+function headerIndex(headers: unknown[], names: string[], fallback: number) {
+  const normalized = headers.map(normalizeHeader);
+  const wanted = names.map(normalizeHeader);
+  const index = normalized.findIndex((h) => wanted.includes(h));
+  return index >= 0 ? index : fallback;
+}
+
+function hasHeader(headers: unknown[], names: string[]) {
+  const normalized = headers.map(normalizeHeader);
+  const wanted = names.map(normalizeHeader);
+  return normalized.some((h) => wanted.includes(h));
+}
+
+function cell(row: unknown[], index: number) {
+  if (index < 0) return "";
+  return String(row[index] ?? "").trim();
+}
+
+function parseActive(value: string) {
+  if (!value) return true;
+  return !["n", "no", "false", "inactive", "0"].includes(value.trim().toLowerCase());
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export async function GET() {
   try {
     const sheetId = process.env.GOOGLE_SHEET_ID;
@@ -69,43 +77,63 @@ export async function GET() {
 
     const sheets = await getSheetsClient();
 
-    // A: Address, B: FolderId, C: Active (Y/N), D: Market
     const resp = await sheets.spreadsheets.values.get({
       spreadsheetId: sheetId,
-      range: `${tab}!A2:D`,
+      range: `${tab}!A:Z`,
     });
 
     const rows = resp.data.values ?? [];
+    const [maybeHeaders = [], ...remainingRows] = rows;
+    const knownHeaders = [
+      "address",
+      "displayName",
+      "siteAddress",
+      "siteId",
+      "folderId",
+      "active",
+      "servicesPerMonth",
+    ];
+    const headers = hasHeader(maybeHeaders, knownHeaders) ? maybeHeaders : [];
+    const body = headers.length > 0 ? remainingRows : rows;
+    const addressIdx = headerIndex(headers, ["address", "displayName", "siteAddress"], 0);
+    const folderIdx = headerIndex(headers, ["folderId", "addressFolderId", "driveFolderId"], 1);
+    const siteIdIdx = headerIndex(headers, ["siteId"], folderIdx);
+    const activeIdx = headerIndex(headers, ["active", "isActive"], 2);
+    const marketIdx = headerIndex(headers, ["market"], 3);
+    const clientIdx = headerIndex(headers, ["clientName", "client"], -1);
+    const subCompanyIdx = headerIndex(headers, ["subCompany", "subCompanyName"], marketIdx);
+    const servicesIdx = headerIndex(headers, ["servicesPerMonth", "expectedServices"], -1);
 
-    const sites: Site[] = rows
+    const sites: Site[] = body
       .filter((r) => Array.isArray(r) && r.length > 0)
       .map((r, i) => {
-        const address = String(r[0] ?? "").trim();
-        const folderId = String(r[1] ?? "").trim();
-        const activeFlag = String(r[2] ?? "").trim().toUpperCase(); // Y / N / blank
-        const market = String(r[3] ?? "").trim();
-
-        const active = activeFlag ? activeFlag === "Y" : true;
+        const address = cell(r, addressIdx);
+        const folderId = cell(r, folderIdx);
+        const active = parseActive(cell(r, activeIdx));
+        const market = cell(r, marketIdx);
+        const siteId = cell(r, siteIdIdx) || folderId || `site-${i + 1}`;
 
         return {
-          siteId: folderId || `site-${i + 1}`, // prefer folderId as the key
+          siteId,
           displayName: address,
           address,
           folderId,
           active,
           market,
+          clientName: cell(r, clientIdx),
+          subCompany: cell(r, subCompanyIdx),
+          servicesPerMonth: Number(cell(r, servicesIdx)) || 0,
         };
       })
       .filter((s) => s.displayName && s.folderId)
       .filter((s) => s.active !== false);
 
     return NextResponse.json(sites);
-  } catch (e: any) {
+  } catch (e: unknown) {
     console.error("Sheets API error:", e);
     return NextResponse.json(
-      { error: "Sheets API error", message: e?.message ?? String(e) },
+      { error: "Sheets API error", message: errorMessage(e) },
       { status: 500 }
     );
   }
 }
-

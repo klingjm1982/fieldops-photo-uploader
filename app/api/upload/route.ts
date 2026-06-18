@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { google } from "googleapis";
 import { Readable } from "stream";
 import sgMail from "@sendgrid/mail";
+import { readServiceAccount } from "@/app/lib/googleServiceAccount";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -32,30 +33,6 @@ function weekFolderName(date: Date) {
   const { year, week } = getISOWeek(date);
   return `${year}-W${String(week).padStart(2, "0")}`;
 }
-
-// ---------- Google clients ----------
-function readServiceAccount() {
-  const clientEmail = process.env.GOOGLE_CLIENT_EMAIL;
-  let privateKey = process.env.GOOGLE_PRIVATE_KEY;
-
-  if (!clientEmail || !privateKey) {
-    throw new Error("Missing GOOGLE_CLIENT_EMAIL / GOOGLE_PRIVATE_KEY");
-  }
-
-  privateKey = privateKey
-    .replace(/\\n/g, "\n")     // if stored with \n
-    .replace(/\r\n/g, "\n")    // windows newlines
-    .trim();
-
-  // Safety: remove accidental surrounding quotes
-  if (privateKey.startsWith('"') && privateKey.endsWith('"')) {
-    privateKey = privateKey.slice(1, -1);
-  }
-
-  return { clientEmail, privateKey };
-}
-
-
 
 async function getDriveClient() {
   const { clientEmail, privateKey } = readServiceAccount();

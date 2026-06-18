@@ -9,6 +9,12 @@ type Site = {
   folderId?: string; // Drive folder id
 };
 
+const MAX_FILES_PER_UPLOAD_REQUEST = 5;
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export default function Page() {
   const [sites, setSites] = useState<Site[]>([]);
   const [loading, setLoading] = useState(true);
@@ -43,9 +49,9 @@ export default function Page() {
         const sitesArray: Site[] = Array.isArray(json) ? json : (json.sites ?? []);
 
         if (!cancelled) setSites(sitesArray);
-      } catch (err: any) {
+      } catch (err: unknown) {
         console.error("sites fetch failed:", err);
-        if (!cancelled) setError(err?.message ?? "Failed to load sites");
+        if (!cancelled) setError(errorMessage(err) || "Failed to load sites");
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -77,7 +83,7 @@ export default function Page() {
   }
 
   // ---------- Client-side compression ----------
-  async function compressImage(file: File, maxW = 2048, quality = 0.78): Promise<File> {
+  async function compressImage(file: File, maxW = 1600, quality = 0.72): Promise<File> {
     if (!file.type.startsWith("image/")) return file;
 
     const img = document.createElement("img");
@@ -115,7 +121,33 @@ export default function Page() {
     return new File([blob], file.name.replace(/\.\w+$/, ".jpg"), { type: "image/jpeg" });
   }
 
-  // ---------- One request for many files ----------
+  async function uploadChunk(files: File[], onPrepared: () => void) {
+    const form = new FormData();
+
+    for (const f of files) {
+      const optimized = await compressImage(f);
+      form.append("files", optimized);
+      onPrepared();
+    }
+
+    form.append("siteId", selected?.siteId ?? "");
+    form.append("folderId", selected?.folderId ?? "");
+    form.append("displayName", selected?.displayName ?? "");
+
+    setStage("uploading");
+
+    const res = await fetch("/api/upload", {
+      method: "POST",
+      body: form,
+    });
+
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(json?.message ?? `Upload failed (HTTP ${res.status})`);
+
+    return Number(json.count ?? files.length);
+  }
+
+  // ---------- Upload many selected files in Android-friendly chunks ----------
   async function handleBatchUpload(files: File[]) {
     if (!selected?.folderId) {
       setUploadMsg("Select a site first.");
@@ -129,35 +161,20 @@ export default function Page() {
     setStage("preparing");
 
     try {
-      const form = new FormData();
+      let uploadedTotal = 0;
 
-      // Compress each image first (fast uploads)
-      for (const f of files) {
-        const optimized = await compressImage(f);
-        form.append("files", optimized);
-        setUploadedCount((c) => c + 1); // preparing progress
+      for (let i = 0; i < files.length; i += MAX_FILES_PER_UPLOAD_REQUEST) {
+        const chunk = files.slice(i, i + MAX_FILES_PER_UPLOAD_REQUEST);
+        const uploadedInChunk = await uploadChunk(chunk, () => {
+          setUploadedCount((c) => c + 1);
+        });
+        uploadedTotal += uploadedInChunk;
       }
 
-      // Now send one request
-      setStage("uploading");
-      setUploadedCount(0);
-
-      form.append("siteId", selected.siteId);
-      form.append("folderId", selected.folderId);
-      form.append("displayName", selected.displayName);
-
-      const res = await fetch("/api/upload", {
-        method: "POST",
-        body: form,
-      });
-
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(json?.message ?? `Upload failed (HTTP ${res.status})`);
-
-      setUploadMsg(`✅ Uploaded ${json.count ?? files.length} photo(s)`);
-    } catch (e: any) {
+      setUploadMsg(`✅ Uploaded ${uploadedTotal} photo(s)`);
+    } catch (e: unknown) {
       console.error(e);
-      setUploadMsg(`❌ ${e?.message ?? "Upload failed"}`);
+      setUploadMsg(`❌ ${errorMessage(e) || "Upload failed"}`);
     } finally {
       setUploading(false);
       setStage("idle");
@@ -282,9 +299,14 @@ export default function Page() {
                   cursor: !selected || uploading ? "not-allowed" : "pointer",
                 }}
               >
-                🖼️ Photo Library
+                🖼️ Photo Library (multi)
               </button>
             </div>
+
+            <p style={{ margin: "10px 0 0", color: "#666", fontSize: 13 }}>
+              On Android, use Photo Library to select several saved photos at once. Camera usually
+              captures one new photo at a time.
+            </p>
 
             <input
               ref={cameraInputRef}
