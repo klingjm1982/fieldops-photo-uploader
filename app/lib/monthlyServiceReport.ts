@@ -247,23 +247,31 @@ function parseUploads(rows: unknown[][], timeZone: string) {
 
 export async function refreshMonthlyServiceReport(monthParam?: string) {
   const spreadsheetId = process.env.GOOGLE_SHEET_ID;
-  const sitesTab = process.env.GOOGLE_SHEET_TAB || "Sheet1";
+  const sitesTab = process.env.GOOGLE_SHEET_TAB || "Sites";
   const uploadsTab = process.env.GOOGLE_UPLOADS_TAB || "UploadsLog";
   const timeZone = process.env.SERVICE_TIME_ZONE || "America/Chicago";
 
   if (!spreadsheetId) throw new Error("Missing GOOGLE_SHEET_ID");
 
   const sheets = await getSheetsClient();
-  const [sitesResp, uploadsResp] = await Promise.all([
-    sheets.spreadsheets.values.get({
+  let sitesResp;
+  try {
+    sitesResp = await sheets.spreadsheets.values.get({
       spreadsheetId,
       range: `${sitesTab}!A:Z`,
-    }),
-    sheets.spreadsheets.values.get({
+    });
+  } catch (error) {
+    if (sitesTab !== "Sheet1") throw error;
+    sitesResp = await sheets.spreadsheets.values.get({
       spreadsheetId,
-      range: `${uploadsTab}!A:Z`,
-    }),
-  ]);
+      range: "Sites!A:Z",
+    });
+  }
+
+  const uploadsResp = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: `${uploadsTab}!A:Z`,
+  });
 
   const sites = parseSites(sitesResp.data.values ?? []);
   const uploads = parseUploads(uploadsResp.data.values ?? [], timeZone);
