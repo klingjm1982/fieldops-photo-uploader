@@ -114,6 +114,32 @@ export default function CorrigoSyncPage() {
     [state, month]
   );
 
+  const pendingQueueForMonth = useMemo(
+    () => queueForMonth.filter((row) => row.status === "Pending Corrigo Upload"),
+    [queueForMonth]
+  );
+
+  async function updateQueueStatus(queueId: string, status: string) {
+    try {
+      setSaving(true);
+      setMessage(null);
+      setError(null);
+      const res = await fetch("/api/corrigo-sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "updateQueueStatus", queueId, status }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.message ?? `HTTP ${res.status}`);
+      setMessage(`Queue row marked ${status}.`);
+      await load(month);
+    } catch (err: unknown) {
+      setError(errorMessage(err) || "Failed to update queue status");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function addWorkOrder(evt: React.FormEvent) {
     evt.preventDefault();
     try {
@@ -327,7 +353,8 @@ export default function CorrigoSyncPage() {
               ["Work orders", workOrdersForMonth.length],
               ["Upload groups", state?.uploadGroupCount ?? 0],
               ["Ready to queue", state?.queueCandidateCount ?? 0],
-              ["Queued", queueForMonth.length],
+              ["Pending", pendingQueueForMonth.length],
+              ["Queued total", queueForMonth.length],
             ].map(([label, value]) => (
               <div key={label} style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: 12 }}>
                 <div style={{ fontSize: 12, color: "#667085", marginBottom: 4 }}>{label}</div>
@@ -382,7 +409,7 @@ export default function CorrigoSyncPage() {
               <table style={{ width: "100%", minWidth: 980, borderCollapse: "collapse" }}>
                 <thead>
                   <tr style={{ background: "#f8fafc" }}>
-                    {["Status", "Service Date", "Work Order", "Address", "Photos", "Site ID", "Created"].map(
+                    {["Status", "Change Status", "Service Date", "Work Order", "Address", "Photos", "Site ID", "Created"].map(
                       (heading) => (
                         <th key={heading} style={{ textAlign: "left", padding: 10, borderBottom: "1px solid #e5e7eb" }}>
                           {heading}
@@ -397,6 +424,27 @@ export default function CorrigoSyncPage() {
                       <td style={{ padding: 10, borderBottom: "1px solid #eef2f7", fontWeight: 800 }}>
                         {row.status}
                       </td>
+                      <td style={{ padding: 10, borderBottom: "1px solid #eef2f7" }}>
+                        {row.status === "Pending Corrigo Upload" ? (
+                          <button
+                            type="button"
+                            onClick={() => updateQueueStatus(row.queueId, "Already Uploaded")}
+                            disabled={saving}
+                            style={{ ...buttonStyle, padding: "7px 10px", whiteSpace: "nowrap" }}
+                          >
+                            Mark already uploaded
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => updateQueueStatus(row.queueId, "Pending Corrigo Upload")}
+                            disabled={saving}
+                            style={{ ...buttonStyle, padding: "7px 10px", whiteSpace: "nowrap" }}
+                          >
+                            Reopen
+                          </button>
+                        )}
+                      </td>
                       <td style={{ padding: 10, borderBottom: "1px solid #eef2f7" }}>{row.serviceDate}</td>
                       <td style={{ padding: 10, borderBottom: "1px solid #eef2f7" }}>{row.workOrderNumber}</td>
                       <td style={{ padding: 10, borderBottom: "1px solid #eef2f7" }}>{row.address}</td>
@@ -409,7 +457,7 @@ export default function CorrigoSyncPage() {
                   ))}
                   {queueForMonth.length === 0 && (
                     <tr>
-                      <td colSpan={7} style={{ padding: 14, textAlign: "center", color: "#667085" }}>
+                      <td colSpan={8} style={{ padding: 14, textAlign: "center", color: "#667085" }}>
                         No queued Corrigo uploads yet. Add work order mappings, then build the queue.
                       </td>
                     </tr>

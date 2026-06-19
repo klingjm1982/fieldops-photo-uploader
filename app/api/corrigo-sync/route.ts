@@ -5,6 +5,7 @@ import {
   buildCorrigoQueue,
   getCorrigoSyncState,
   rebuildCorrigoQueue,
+  updateCorrigoQueueStatus,
 } from "@/app/lib/corrigoSync";
 
 export const runtime = "nodejs";
@@ -68,6 +69,15 @@ export async function POST(req: Request) {
         body: String(body.emailBody ?? ""),
       });
       return NextResponse.json(result, { status: result.ok ? 200 : 422 });
+    }
+
+    if (action === "updateQueueStatus") {
+      const result = await updateCorrigoQueueStatus({
+        queueId: String(body.queueId ?? "").trim(),
+        status: String(body.status ?? "").trim(),
+        lastError: String(body.lastError ?? "").trim(),
+      });
+      return NextResponse.json(result);
     }
 
     return NextResponse.json({ message: "Unknown action" }, { status: 400 });

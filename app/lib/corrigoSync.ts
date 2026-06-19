@@ -599,6 +599,54 @@ export async function buildCorrigoQueue(monthParam?: string) {
   return { created: rowsToAppend.length, rows: rowsToAppend };
 }
 
+export async function updateCorrigoQueueStatus(params: {
+  queueId: string;
+  status: string;
+  lastError?: string;
+}) {
+  const sheets = await getSheetsClient();
+  await ensureSheet(sheets, QUEUE_TAB, QUEUE_HEADERS);
+
+  const values = await readValues(sheets, QUEUE_TAB);
+  const [maybeHeaders = [], ...remainingRows] = values;
+  const hasQueueHeader = hasHeader(maybeHeaders, ["queueId", "status"]);
+  const headers = hasQueueHeader ? maybeHeaders : QUEUE_HEADERS;
+  const rows = hasQueueHeader ? remainingRows : values;
+  const queueIdIdx = headerIndex(headers, ["queueId"], 0);
+  const statusIdx = headerIndex(headers, ["status"], 10);
+  const lastErrorIdx = headerIndex(headers, ["lastError"], 12);
+  const uploadedAtIdx = headerIndex(headers, ["uploadedAt"], 13);
+  const updatedAtIdx = headerIndex(headers, ["updatedAt"], 15);
+  const rowOffset = hasQueueHeader ? 2 : 1;
+  const rowIndex = rows.findIndex((row) => cell(row, queueIdIdx) === params.queueId);
+
+  if (rowIndex < 0) {
+    throw new Error("Queue row not found.");
+  }
+
+  const now = new Date().toISOString();
+  const sheetRowNumber = rowIndex + rowOffset;
+  const existingRow = [...rows[rowIndex]];
+  const width = Math.max(headers.length, QUEUE_HEADERS.length);
+  while (existingRow.length < width) existingRow.push("");
+
+  existingRow[statusIdx] = params.status;
+  existingRow[lastErrorIdx] = params.lastError ?? "";
+  existingRow[updatedAtIdx] = now;
+  if (["Already Uploaded", "Uploaded to Corrigo"].includes(params.status)) {
+    existingRow[uploadedAtIdx] = now;
+  }
+
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: spreadsheetId(),
+    range: `${QUEUE_TAB}!A${sheetRowNumber}:P${sheetRowNumber}`,
+    valueInputOption: "USER_ENTERED",
+    requestBody: { values: [existingRow.slice(0, QUEUE_HEADERS.length)] },
+  });
+
+  return { ok: true, queueId: params.queueId, status: params.status };
+}
+
 export async function rebuildCorrigoQueue(monthParam?: string) {
   const sheets = await getSheetsClient();
   await ensureSheet(sheets, WORK_ORDERS_TAB, WORK_ORDER_HEADERS);
