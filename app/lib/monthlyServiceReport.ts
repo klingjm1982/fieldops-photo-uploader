@@ -86,6 +86,17 @@ function parseNumber(value: string, fallback = 0) {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
 }
 
+function isSiteHeaderRow(siteId: string, address: string) {
+  const normalizedSiteId = normalizeHeader(siteId);
+  const normalizedAddress = normalizeHeader(address);
+  return (
+    normalizedAddress.includes("address") ||
+    normalizedAddress.includes("displayname") ||
+    normalizedSiteId.includes("siteid") ||
+    normalizedSiteId.includes("folderid")
+  );
+}
+
 function localDateParts(value: string, timeZone: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return null;
@@ -208,7 +219,8 @@ function parseSites(rows: unknown[][]): SiteRow[] {
         active: parseActive(cell(r, activeIdx)),
       };
     })
-    .filter((s) => s.siteId && s.address && s.active);
+    .filter((s) => s.siteId && s.address && s.active)
+    .filter((s) => !isSiteHeaderRow(s.siteId, s.address));
 }
 
 function parseUploads(rows: unknown[][], timeZone: string) {

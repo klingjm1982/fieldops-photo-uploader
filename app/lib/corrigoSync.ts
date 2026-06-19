@@ -130,6 +130,17 @@ function parseNumber(value: string) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function isSiteHeaderRow(siteId: string, address: string) {
+  const normalizedSiteId = normalizeHeader(siteId);
+  const normalizedAddress = normalizeHeader(address);
+  return (
+    normalizedAddress.includes("address") ||
+    normalizedAddress.includes("displayname") ||
+    normalizedSiteId.includes("siteid") ||
+    normalizedSiteId.includes("folderid")
+  );
+}
+
 function localDateParts(value: string, timeZone: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return null;
@@ -352,6 +363,7 @@ function parseSites(rows: unknown[][]): SiteMatch[] {
       active: parseActive(cell(row, activeIdx)),
     }))
     .filter((row) => row.siteId && row.address && row.active)
+    .filter((row) => !isSiteHeaderRow(row.siteId, row.address))
     .map((row) => ({ siteId: row.siteId, address: row.address }));
 }
 

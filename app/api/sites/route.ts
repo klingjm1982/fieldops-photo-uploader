@@ -62,6 +62,17 @@ function parseActive(value: string) {
   return !["n", "no", "false", "inactive", "0"].includes(value.trim().toLowerCase());
 }
 
+function isSiteHeaderRow(siteId: string, address: string) {
+  const normalizedSiteId = normalizeHeader(siteId);
+  const normalizedAddress = normalizeHeader(address);
+  return (
+    normalizedAddress.includes("address") ||
+    normalizedAddress.includes("displayname") ||
+    normalizedSiteId.includes("siteid") ||
+    normalizedSiteId.includes("folderid")
+  );
+}
+
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
@@ -126,6 +137,7 @@ export async function GET() {
         };
       })
       .filter((s) => s.displayName && s.folderId)
+      .filter((s) => !isSiteHeaderRow(s.siteId, s.displayName))
       .filter((s) => s.active !== false);
 
     return NextResponse.json(sites);
