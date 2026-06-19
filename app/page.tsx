@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
 type Site = {
@@ -197,10 +198,35 @@ export default function Page() {
   }
 
   return (
-    <main style={{ padding: 16, maxWidth: 720, margin: "0 auto" }}>
-      <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 12 }}>
-        FIELD OPS Photo Uploader
-      </h1>
+    <main style={{ minHeight: "100vh", background: "#f6f8fb" }}>
+      <div style={{ padding: 16, maxWidth: 720, margin: "0 auto" }}>
+      <header
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 14,
+          flexWrap: "wrap",
+          marginBottom: 18,
+          padding: "12px 0",
+        }}
+      >
+        <Image
+          src="/logo.png"
+          alt="FIELD OPS"
+          width={170}
+          height={67}
+          priority
+          style={{ maxWidth: "58vw", height: "auto", display: "block" }}
+        />
+        <div>
+          <h1 style={{ fontSize: 22, fontWeight: 800, margin: 0, color: "#172033" }}>
+            Photo Uploader
+          </h1>
+          <div style={{ color: "#64748b", fontSize: 13, marginTop: 3 }}>
+            Upload site photos to the correct property folder
+          </div>
+        </div>
+      </header>
 
       {loading && <p>Loading sites…</p>}
 
@@ -358,6 +384,7 @@ export default function Page() {
           </div>
         </>
       )}
+      </div>
     </main>
   );
 }
