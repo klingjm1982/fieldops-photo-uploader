@@ -183,6 +183,55 @@ function splitLines(value: string) {
     .filter(Boolean);
 }
 
+const MONTH_ABBREVIATIONS: Record<string, string> = {
+  JAN: "01",
+  FEB: "02",
+  MAR: "03",
+  APR: "04",
+  MAY: "05",
+  JUN: "06",
+  JUL: "07",
+  AUG: "08",
+  SEP: "09",
+  SEPT: "09",
+  OCT: "10",
+  NOV: "11",
+  DEC: "12",
+};
+
+function serviceDateFromFilename(filename: string, fallbackYear: string) {
+  const upper = filename.toUpperCase();
+  const isoMatch = upper.match(/\b(20\d{2})[-_ ]?([01]\d)[-_ ]?([0-3]\d)\b/);
+  if (isoMatch) return `${isoMatch[1]}-${isoMatch[2]}-${isoMatch[3]}`;
+
+  const slashDateMatch = upper.match(/\b([01]?\d)[-.\/_ ]([0-3]?\d)[-.\/_ ](20\d{2})\b/);
+  if (slashDateMatch) {
+    return `${slashDateMatch[3]}-${slashDateMatch[1].padStart(2, "0")}-${slashDateMatch[2].padStart(2, "0")}`;
+  }
+
+  const dayMonthMatch = upper.match(/\b([0-3]?\d)\s*[-_ ]?\s*(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|SEPT|OCT|NOV|DEC)\b/);
+  if (dayMonthMatch) {
+    return `${fallbackYear}-${MONTH_ABBREVIATIONS[dayMonthMatch[2]]}-${dayMonthMatch[1].padStart(2, "0")}`;
+  }
+
+  const monthDayMatch = upper.match(/\b(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|SEPT|OCT|NOV|DEC)\s*[-_ ]?\s*([0-3]?\d)\b/);
+  if (monthDayMatch) {
+    return `${fallbackYear}-${MONTH_ABBREVIATIONS[monthDayMatch[1]]}-${monthDayMatch[2].padStart(2, "0")}`;
+  }
+
+  return "";
+}
+
+function serviceDateFromFilenames(filenames: string[], fallbackDate: string) {
+  const fallbackYear = fallbackDate.slice(0, 4);
+  const dates = filenames
+    .map((filename) => serviceDateFromFilename(filename, fallbackYear))
+    .filter(Boolean)
+    .sort();
+
+  return dates[0] || fallbackDate;
+}
+
 async function ensureSheet(sheets: sheets_v4.Sheets, title: string, headers: string[]) {
   const id = spreadsheetId();
   const meta = await sheets.spreadsheets.get({
@@ -297,12 +346,16 @@ function parseUploadGroups(rows: unknown[][], timeZone: string, month: string) {
     const siteId = cell(row, siteIdx);
     if (!parts || parts.month !== month || !siteId) continue;
 
-    const key = `${parts.month}__${siteId}__${parts.date}`;
-    const existing = groups.get(key);
     const countText = cell(row, countIdx);
     const parsedCount = Number(countText.match(/\d+/)?.[0] ?? "0");
     const links = splitLines(cell(row, linksIdx));
     const filenames = splitLines(cell(row, filenamesIdx));
+    const serviceDate = serviceDateFromFilenames(filenames, parts.date);
+    const serviceMonth = serviceDate.slice(0, 7);
+    if (serviceMonth !== month) continue;
+
+    const key = `${serviceMonth}__${siteId}__${serviceDate}`;
+    const existing = groups.get(key);
 
     if (existing) {
       existing.photoCount += parsedCount || links.length || filenames.length || 1;
@@ -313,10 +366,10 @@ function parseUploadGroups(rows: unknown[][], timeZone: string, month: string) {
     }
 
     groups.set(key, {
-      month: parts.month,
+      month: serviceMonth,
       siteId,
       address: cell(row, addressIdx),
-      serviceDate: parts.date,
+      serviceDate,
       uploadTimestamp: timestamp,
       photoCount: parsedCount || links.length || filenames.length || 1,
       driveLinks: links,
@@ -544,4 +597,31 @@ export async function buildCorrigoQueue(monthParam?: string) {
   }
 
   return { created: rowsToAppend.length, rows: rowsToAppend };
+}
+
+export async function rebuildCorrigoQueue(monthParam?: string) {
+  const sheets = await getSheetsClient();
+  await ensureSheet(sheets, WORK_ORDERS_TAB, WORK_ORDER_HEADERS);
+  await ensureSheet(sheets, QUEUE_TAB, QUEUE_HEADERS);
+
+  const state = await getCorrigoSyncState(monthParam);
+  const preservedRows = state.queue.filter(
+    (row) => row.month !== state.month || row.status !== "Pending Corrigo Upload"
+  );
+
+  await sheets.spreadsheets.values.clear({
+    spreadsheetId: spreadsheetId(),
+    range: `${QUEUE_TAB}!A:P`,
+  });
+
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: spreadsheetId(),
+    range: `${QUEUE_TAB}!A1:P${Math.max(preservedRows.length + 1, 1)}`,
+    valueInputOption: "USER_ENTERED",
+    requestBody: {
+      values: [QUEUE_HEADERS, ...preservedRows.map(queueRowToValues)],
+    },
+  });
+
+  return buildCorrigoQueue(state.month);
 }

@@ -166,6 +166,27 @@ export default function CorrigoSyncPage() {
     }
   }
 
+  async function rebuildQueue() {
+    try {
+      setSaving(true);
+      setMessage(null);
+      setError(null);
+      const res = await fetch("/api/corrigo-sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "rebuildQueue", month }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.message ?? `HTTP ${res.status}`);
+      setMessage(`Rebuilt queue and created ${json.created ?? 0} pending row(s).`);
+      await load(month);
+    } catch (err: unknown) {
+      setError(errorMessage(err) || "Failed to rebuild Corrigo queue");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function parseEmail(evt: React.FormEvent) {
     evt.preventDefault();
     try {
@@ -220,6 +241,9 @@ export default function CorrigoSyncPage() {
         </button>
         <button type="button" onClick={buildQueue} disabled={loading || saving} style={buttonStyle}>
           Build Queue
+        </button>
+        <button type="button" onClick={rebuildQueue} disabled={loading || saving} style={buttonStyle}>
+          Rebuild Queue Dates
         </button>
       </section>
 

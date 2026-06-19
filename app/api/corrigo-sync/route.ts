@@ -4,6 +4,7 @@ import {
   addCorrigoWorkOrder,
   buildCorrigoQueue,
   getCorrigoSyncState,
+  rebuildCorrigoQueue,
 } from "@/app/lib/corrigoSync";
 
 export const runtime = "nodejs";
@@ -53,6 +54,11 @@ export async function POST(req: Request) {
 
     if (action === "buildQueue") {
       const result = await buildCorrigoQueue(String(body.month ?? "").trim() || undefined);
+      return NextResponse.json({ ok: true, ...result });
+    }
+
+    if (action === "rebuildQueue") {
+      const result = await rebuildCorrigoQueue(String(body.month ?? "").trim() || undefined);
       return NextResponse.json({ ok: true, ...result });
     }
 
