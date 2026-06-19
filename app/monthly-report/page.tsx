@@ -168,12 +168,13 @@ export default function MonthlyReportPage() {
         acc.expected += Number(row.expectedServices) || 0;
         acc.completed += Number(row.completedServices) || 0;
         acc.missing += Number(row.missingServices) || 0;
+        acc.extra += Math.max((Number(row.completedServices) || 0) - (Number(row.expectedServices) || 0), 0);
         if (row.status === "OK") acc.ok += 1;
         if (row.status === "LOW") acc.low += 1;
         if (row.status === "MISSING") acc.missingSites += 1;
         return acc;
       },
-      { expected: 0, completed: 0, missing: 0, ok: 0, low: 0, missingSites: 0 }
+      { expected: 0, completed: 0, missing: 0, extra: 0, ok: 0, low: 0, missingSites: 0 }
     );
   }, [filteredRows]);
 
@@ -264,11 +265,13 @@ export default function MonthlyReportPage() {
           >
             {[
               ["Properties", filteredRows.length],
-              ["Expected", totals.expected],
-              ["Completed", totals.completed],
-              ["Missing", totals.missing],
-              ["LOW", totals.low],
-              ["MISSING", totals.missingSites],
+              ["Expected Services", totals.expected],
+              ["Completed Services", totals.completed],
+              ["Missing Services", totals.missing],
+              ["Extra Services", totals.extra],
+              ["OK Properties", totals.ok],
+              ["LOW Properties", totals.low],
+              ["MISSING Properties", totals.missingSites],
             ].map(([label, value]) => (
               <div
                 key={label}
