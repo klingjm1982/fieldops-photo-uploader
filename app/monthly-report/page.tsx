@@ -9,6 +9,7 @@ type MonthlyStatus = "OK" | "LOW" | "MISSING";
 type MonthlyServiceRow = {
   month: string;
   siteId: string;
+  workOrderNumber?: string;
   address: string;
   clientName: string;
   subCompany: string;
@@ -387,7 +388,7 @@ export default function MonthlyReportPage() {
                         </span>
                       </td>
                       <td style={{ padding: 12, borderBottom: "1px solid #eef2f7", color: "#667085" }}>
-                        -
+                        {row.workOrderNumber || "-"}
                       </td>
                       <td style={{ padding: 12, borderBottom: "1px solid #eef2f7", fontWeight: 700 }}>
                         {row.address}

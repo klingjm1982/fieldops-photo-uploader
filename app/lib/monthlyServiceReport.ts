@@ -6,6 +6,7 @@ export type MonthlyStatus = "OK" | "LOW" | "MISSING";
 export type MonthlyServiceRow = {
   month: string;
   siteId: string;
+  workOrderNumber: string;
   address: string;
   clientName: string;
   subCompany: string;
@@ -30,6 +31,7 @@ const MISSED_TAB = "MissedServices";
 const SUMMARY_HEADERS = [
   "month",
   "siteId",
+  "workOrderNumber",
   "address",
   "clientName",
   "subCompany",
@@ -132,6 +134,7 @@ function rowToValues(row: MonthlyServiceRow) {
   return [
     row.month,
     row.siteId,
+    row.workOrderNumber,
     row.address,
     row.clientName,
     row.subCompany,
@@ -172,11 +175,11 @@ async function replaceTab(
   await ensureSheet(sheets, spreadsheetId, title);
   await sheets.spreadsheets.values.clear({
     spreadsheetId,
-    range: `${title}!A:J`,
+    range: `${title}!A:K`,
   });
   await sheets.spreadsheets.values.update({
     spreadsheetId,
-    range: `${title}!A1:J${Math.max(rows.length, 1)}`,
+    range: `${title}!A1:K${Math.max(rows.length, 1)}`,
     valueInputOption: "USER_ENTERED",
     requestBody: { values: rows },
   });
@@ -257,10 +260,35 @@ function parseUploads(rows: unknown[][], timeZone: string) {
   return { completedByMonthSite, lastUploadByMonthSite, months };
 }
 
+function parseWorkOrders(rows: unknown[][]) {
+  const [maybeHeaders = [], ...remainingRows] = rows;
+  const headers = hasHeader(maybeHeaders, ["workOrderNumber", "siteId", "month"])
+    ? maybeHeaders
+    : [];
+  const body = headers.length > 0 ? remainingRows : rows;
+  const monthIdx = headerIndex(headers, ["month"], 0);
+  const siteIdx = headerIndex(headers, ["siteId"], 1);
+  const workOrderIdx = headerIndex(headers, ["workOrderNumber", "corrigoWorkOrderNumber"], 3);
+  const activeIdx = headerIndex(headers, ["active"], 4);
+  const workOrders = new Map<string, string>();
+
+  for (const row of body) {
+    const month = cell(row, monthIdx);
+    const siteId = cell(row, siteIdx);
+    const workOrderNumber = cell(row, workOrderIdx);
+    const active = parseActive(cell(row, activeIdx));
+    if (!month || !siteId || !workOrderNumber || !active) continue;
+    workOrders.set(`${month}::${siteId}`, workOrderNumber);
+  }
+
+  return workOrders;
+}
+
 export async function refreshMonthlyServiceReport(monthParam?: string) {
   const spreadsheetId = process.env.GOOGLE_SHEET_ID;
   const sitesTab = process.env.GOOGLE_SHEET_TAB || "Sites";
   const uploadsTab = process.env.GOOGLE_UPLOADS_TAB || "UploadsLog";
+  const workOrdersTab = "CorrigoWorkOrders";
   const timeZone = process.env.SERVICE_TIME_ZONE || "America/Chicago";
 
   if (!spreadsheetId) throw new Error("Missing GOOGLE_SHEET_ID");
@@ -284,9 +312,19 @@ export async function refreshMonthlyServiceReport(monthParam?: string) {
     spreadsheetId,
     range: `${uploadsTab}!A:Z`,
   });
+  let workOrdersResp;
+  try {
+    workOrdersResp = await sheets.spreadsheets.values.get({
+      spreadsheetId,
+      range: `${workOrdersTab}!A:Z`,
+    });
+  } catch {
+    workOrdersResp = { data: { values: [] } };
+  }
 
   const sites = parseSites(sitesResp.data.values ?? []);
   const uploads = parseUploads(uploadsResp.data.values ?? [], timeZone);
+  const workOrders = parseWorkOrders(workOrdersResp.data.values ?? []);
   const months = monthParam
     ? [monthParam]
     : Array.from(new Set([...uploads.months, currentMonth(timeZone)])).sort().reverse();
@@ -304,6 +342,7 @@ export async function refreshMonthlyServiceReport(monthParam?: string) {
         return {
           month,
           siteId: site.siteId,
+          workOrderNumber: workOrders.get(monthSiteKey) ?? "",
           address: site.address,
           clientName: site.clientName,
           subCompany: site.subCompany,
