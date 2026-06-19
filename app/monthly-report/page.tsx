@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import React, { useEffect, useMemo, useState } from "react";
 
@@ -79,8 +80,15 @@ const US_STATE_CODES = new Set([
 
 const statusColors: Record<MonthlyStatus, { bg: string; text: string }> = {
   OK: { bg: "#dcfce7", text: "#166534" },
-  LOW: { bg: "#fef3c7", text: "#92400e" },
+  LOW: { bg: "#fde68a", text: "#92400e" },
   MISSING: { bg: "#fee2e2", text: "#991b1b" },
+};
+
+const metricColors: Record<string, { bg: string; border: string; text: string }> = {
+  "OK Properties": { bg: "#f0fdf4", border: "#86efac", text: "#166534" },
+  "LOW Properties": { bg: "#fffbeb", border: "#fbbf24", text: "#92400e" },
+  "MISSING Properties": { bg: "#fef2f2", border: "#fca5a5", text: "#991b1b" },
+  "Missing Services": { bg: "#fff7ed", border: "#fdba74", text: "#9a3412" },
 };
 
 function unique(values: string[]) {
@@ -188,12 +196,35 @@ export default function MonthlyReportPage() {
   };
 
   return (
-    <main style={{ padding: 18, maxWidth: 1180, margin: "0 auto", color: "#172033" }}>
-      <div style={{ display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
-        <h1 style={{ fontSize: 24, fontWeight: 800, margin: "0 0 6px" }}>
-          Monthly Service Report
-        </h1>
-        <Link href="/" style={{ color: "#2563eb", fontSize: 14 }}>
+    <main style={{ minHeight: "100vh", background: "#f6f8fb", color: "#172033" }}>
+      <div style={{ maxWidth: 1220, margin: "0 auto", padding: 18 }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 16,
+          flexWrap: "wrap",
+          marginBottom: 14,
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+          <Image
+            src="/logo.png"
+            alt="FIELD OPS"
+            width={170}
+            height={67}
+            priority
+            style={{ maxWidth: "48vw", height: "auto", display: "block" }}
+          />
+          <div>
+            <h1 style={{ fontSize: 26, fontWeight: 900, margin: 0 }}>Monthly Service Report</h1>
+            <div style={{ color: "#64748b", fontSize: 13, marginTop: 3 }}>
+              Service completion by property and month
+            </div>
+          </div>
+        </div>
+        <Link href="/" style={{ color: "#2563eb", fontSize: 14, fontWeight: 700 }}>
           Back to uploader
         </Link>
       </div>
@@ -203,7 +234,18 @@ export default function MonthlyReportPage() {
 
       {!loading && !error && (
         <>
-          <section style={{ display: "flex", gap: 10, flexWrap: "wrap", margin: "16px 0" }}>
+          <section
+            style={{
+              display: "flex",
+              gap: 10,
+              flexWrap: "wrap",
+              margin: "16px 0",
+              padding: 12,
+              background: "#fff",
+              border: "1px solid #e5e7eb",
+              borderRadius: 8,
+            }}
+          >
             <select value={month} onChange={(e) => setMonth(e.target.value)} style={controlStyle}>
               {months.map((m) => (
                 <option key={m} value={m}>
@@ -272,24 +314,32 @@ export default function MonthlyReportPage() {
               ["OK Properties", totals.ok],
               ["LOW Properties", totals.low],
               ["MISSING Properties", totals.missingSites],
-            ].map(([label, value]) => (
+            ].map(([label, value]) => {
+              const colors = metricColors[String(label)] ?? {
+                bg: "#fff",
+                border: "#e5e7eb",
+                text: "#172033",
+              };
+              return (
               <div
                 key={label}
-                style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: 12, background: "#fff" }}
+                style={{ border: `1px solid ${colors.border}`, borderRadius: 8, padding: 12, background: colors.bg }}
               >
                 <div style={{ fontSize: 12, color: "#667085", marginBottom: 4 }}>{label}</div>
-                <div style={{ fontSize: 22, fontWeight: 800 }}>{value}</div>
+                <div style={{ fontSize: 22, fontWeight: 900, color: colors.text }}>{value}</div>
               </div>
-            ))}
+              );
+            })}
           </section>
 
-          <div style={{ overflowX: "auto", border: "1px solid #e5e7eb", borderRadius: 8 }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 980 }}>
+          <div style={{ overflowX: "auto", border: "1px solid #e5e7eb", borderRadius: 8, background: "#fff" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1080 }}>
               <thead>
-                <tr style={{ background: "#f8fafc" }}>
+                <tr style={{ background: "#eaf1f8" }}>
                   {[
                     "Month",
                     "Status",
+                    "Work Order",
                     "Address",
                     "Client",
                     "Sub-company",
@@ -336,6 +386,9 @@ export default function MonthlyReportPage() {
                           {row.status}
                         </span>
                       </td>
+                      <td style={{ padding: 12, borderBottom: "1px solid #eef2f7", color: "#667085" }}>
+                        -
+                      </td>
                       <td style={{ padding: 12, borderBottom: "1px solid #eef2f7", fontWeight: 700 }}>
                         {row.address}
                       </td>
@@ -373,7 +426,7 @@ export default function MonthlyReportPage() {
                 })}
                 {filteredRows.length === 0 && (
                   <tr>
-                    <td colSpan={10} style={{ padding: 18, textAlign: "center", color: "#667085" }}>
+                    <td colSpan={11} style={{ padding: 18, textAlign: "center", color: "#667085" }}>
                       No properties match these filters.
                     </td>
                   </tr>
@@ -383,6 +436,7 @@ export default function MonthlyReportPage() {
           </div>
         </>
       )}
+      </div>
     </main>
   );
 }
