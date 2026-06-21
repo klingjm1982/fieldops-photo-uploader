@@ -3,6 +3,7 @@ import { google } from "googleapis";
 import { Readable } from "stream";
 import sgMail from "@sendgrid/mail";
 import { readServiceAccount } from "@/app/lib/googleServiceAccount";
+import { buildCorrigoQueue } from "@/app/lib/corrigoSync";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -210,6 +211,8 @@ export async function POST(req: Request) {
     // Sheet status
     let sheetLogged = false;
     let sheetError: string | null = null;
+    let corrigoQueueCreated = 0;
+    let corrigoQueueError: string | null = null;
 
     try {
       await appendUploadLogRow({
@@ -226,6 +229,15 @@ export async function POST(req: Request) {
         notes,
       });
       sheetLogged = true;
+
+      try {
+        const month = now.toISOString().slice(0, 7);
+        const result = await buildCorrigoQueue(month);
+        corrigoQueueCreated = result.created;
+      } catch (err: any) {
+        corrigoQueueError = err?.message ?? String(err);
+        console.error("Corrigo queue build failed after upload:", err);
+      }
     } catch (err: any) {
       sheetError = err?.message ?? String(err);
       console.error("UploadsLog append failed:", err);
@@ -282,6 +294,7 @@ export async function POST(req: Request) {
         originalFilename: originalFilenames[i] || "",
       })),
       sheet: { logged: sheetLogged, error: sheetError },
+      corrigoQueue: { created: corrigoQueueCreated, error: corrigoQueueError },
       email: { sent: emailSent, error: emailError },
     });
   } catch (e: any) {

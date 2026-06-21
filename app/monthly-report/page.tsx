@@ -119,6 +119,7 @@ export default function MonthlyReportPage() {
   const [clientName, setClientName] = useState("");
   const [subCompany, setSubCompany] = useState("");
   const [status, setStatus] = useState("");
+  const [workOrderSearch, setWorkOrderSearch] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -160,16 +161,19 @@ export default function MonthlyReportPage() {
   const states = useMemo(() => unique(rows.map((r) => stateFromAddress(r.address))), [rows]);
 
   const filteredRows = useMemo(() => {
+    const normalizedWorkOrderSearch = workOrderSearch.trim().toLowerCase();
     return rows.filter((row) => {
       return (
         (!month || row.month === month) &&
         (!state || stateFromAddress(row.address) === state) &&
         (!clientName || row.clientName === clientName) &&
         (!subCompany || row.subCompany === subCompany) &&
-        (!status || row.status === status)
+        (!status || row.status === status) &&
+        (!normalizedWorkOrderSearch ||
+          String(row.workOrderNumber ?? "").toLowerCase().includes(normalizedWorkOrderSearch))
       );
     });
-  }, [rows, month, state, clientName, subCompany, status]);
+  }, [rows, month, state, clientName, subCompany, status, workOrderSearch]);
 
   const totals = useMemo(() => {
     return filteredRows.reduce(
@@ -254,6 +258,20 @@ export default function MonthlyReportPage() {
                 </option>
               ))}
             </select>
+
+            <input
+              value={workOrderSearch}
+              onChange={(e) => setWorkOrderSearch(e.target.value)}
+              placeholder="Search work order"
+              aria-label="Search work order"
+              inputMode="numeric"
+              style={{
+                ...controlStyle,
+                flex: "1 1 220px",
+                minWidth: 220,
+                fontWeight: 700,
+              }}
+            />
 
             <select value={state} onChange={(e) => setState(e.target.value)} style={controlStyle}>
               <option value="">All states</option>

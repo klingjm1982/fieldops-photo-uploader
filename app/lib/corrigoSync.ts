@@ -272,6 +272,15 @@ async function readValues(sheets: sheets_v4.Sheets, tab: string) {
   return resp.data.values ?? [];
 }
 
+async function sheetIdForTitle(sheets: sheets_v4.Sheets, title: string) {
+  const meta = await sheets.spreadsheets.get({
+    spreadsheetId: spreadsheetId(),
+    fields: "sheets.properties(sheetId,title)",
+  });
+  const sheet = meta.data.sheets?.find((s) => s.properties?.title === title);
+  return sheet?.properties?.sheetId ?? null;
+}
+
 function parseWorkOrders(rows: unknown[][]): CorrigoWorkOrder[] {
   const [maybeHeaders = [], ...remainingRows] = rows;
   const headers = hasHeader(maybeHeaders, ["workOrderNumber", "siteId", "month"])
@@ -285,7 +294,7 @@ function parseWorkOrders(rows: unknown[][]): CorrigoWorkOrder[] {
   const activeIdx = headerIndex(headers, ["active"], 4);
   const notesIdx = headerIndex(headers, ["notes"], 5);
 
-  return body
+  const parsed = body
     .map((row) => ({
       month: cell(row, monthIdx),
       siteId: cell(row, siteIdx),
@@ -295,6 +304,14 @@ function parseWorkOrders(rows: unknown[][]): CorrigoWorkOrder[] {
       notes: cell(row, notesIdx),
     }))
     .filter((row) => row.month && row.siteId && row.workOrderNumber);
+
+  const deduped = new Map<string, CorrigoWorkOrder>();
+  for (const row of parsed) {
+    const key = [row.month, row.siteId, row.workOrderNumber].join("__");
+    if (!deduped.has(key)) deduped.set(key, row);
+  }
+
+  return Array.from(deduped.values());
 }
 
 function parseQueue(rows: unknown[][]): CorrigoQueueRow[] {
@@ -380,6 +397,68 @@ function parseUploadGroups(rows: unknown[][], timeZone: string, month: string) {
   return Array.from(groups.values()).sort((a, b) =>
     a.serviceDate.localeCompare(b.serviceDate) || a.address.localeCompare(b.address)
   );
+}
+
+function matchingUploadLogRowNumbers(rows: unknown[][], timeZone: string, siteId: string, serviceDate: string) {
+  const [maybeHeaders = [], ...remainingRows] = rows;
+  const headers = hasHeader(maybeHeaders, ["timestamp", "timestampISO", "siteId"])
+    ? maybeHeaders
+    : [];
+  const body = headers.length > 0 ? remainingRows : rows;
+  const rowOffset = headers.length > 0 ? 2 : 1;
+  const timestampIdx = headerIndex(headers, ["timestamp", "timestampISO", "uploadedAt"], 0);
+  const siteIdx = headerIndex(headers, ["siteId"], 2);
+  const filenamesIdx = headerIndex(headers, ["originalFilenames", "originalFilename"], 7);
+
+  return body
+    .map((row, index) => {
+      const timestamp = cell(row, timestampIdx);
+      const parts = localDateParts(timestamp, timeZone);
+      const rowSiteId = cell(row, siteIdx);
+      if (!parts || rowSiteId !== siteId) return 0;
+
+      const filenames = splitLines(cell(row, filenamesIdx));
+      const rowServiceDate = serviceDateFromFilenames(filenames, parts.date);
+      return rowServiceDate === serviceDate ? index + rowOffset : 0;
+    })
+    .filter((rowNumber) => rowNumber > 0);
+}
+
+async function highlightUploadedLogRows(sheets: sheets_v4.Sheets, siteId: string, serviceDate: string) {
+  const timeZone = process.env.SERVICE_TIME_ZONE || "America/Chicago";
+  const uploadsRows = await readValues(sheets, UPLOADS_TAB);
+  const rowNumbers = matchingUploadLogRowNumbers(uploadsRows, timeZone, siteId, serviceDate);
+  if (rowNumbers.length === 0) return;
+
+  const uploadsSheetId = await sheetIdForTitle(sheets, UPLOADS_TAB);
+  if (uploadsSheetId === null) return;
+
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId: spreadsheetId(),
+    requestBody: {
+      requests: rowNumbers.map((rowNumber) => ({
+        repeatCell: {
+          range: {
+            sheetId: uploadsSheetId,
+            startRowIndex: rowNumber - 1,
+            endRowIndex: rowNumber,
+            startColumnIndex: 0,
+            endColumnIndex: 10,
+          },
+          cell: {
+            userEnteredFormat: {
+              backgroundColor: {
+                red: 0.85,
+                green: 0.92,
+                blue: 0.83,
+              },
+            },
+          },
+          fields: "userEnteredFormat.backgroundColor",
+        },
+      })),
+    },
+  });
 }
 
 function normalizeAddress(value: string) {
@@ -613,6 +692,8 @@ export async function updateCorrigoQueueStatus(params: {
   const headers = hasQueueHeader ? maybeHeaders : QUEUE_HEADERS;
   const rows = hasQueueHeader ? remainingRows : values;
   const queueIdIdx = headerIndex(headers, ["queueId"], 0);
+  const siteIdIdx = headerIndex(headers, ["siteId"], 2);
+  const serviceDateIdx = headerIndex(headers, ["serviceDate"], 4);
   const statusIdx = headerIndex(headers, ["status"], 10);
   const lastErrorIdx = headerIndex(headers, ["lastError"], 12);
   const uploadedAtIdx = headerIndex(headers, ["uploadedAt"], 13);
@@ -643,6 +724,14 @@ export async function updateCorrigoQueueStatus(params: {
     valueInputOption: "USER_ENTERED",
     requestBody: { values: [existingRow.slice(0, QUEUE_HEADERS.length)] },
   });
+
+  if (params.status === "Uploaded to Corrigo") {
+    await highlightUploadedLogRows(
+      sheets,
+      cell(existingRow, siteIdIdx),
+      cell(existingRow, serviceDateIdx)
+    );
+  }
 
   return { ok: true, queueId: params.queueId, status: params.status };
 }

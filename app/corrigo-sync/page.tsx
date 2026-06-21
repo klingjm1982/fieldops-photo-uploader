@@ -48,6 +48,16 @@ function currentMonth() {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
 }
 
+function formatDuration(totalSeconds: number) {
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = Math.round(totalSeconds % 60);
+  if (minutes <= 0) return `${seconds}s`;
+  if (minutes < 60) return `${minutes}m ${seconds}s`;
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return `${hours}h ${remainingMinutes}m`;
+}
+
 const inputStyle: React.CSSProperties = {
   width: "100%",
   padding: "10px 12px",
@@ -118,6 +128,47 @@ export default function CorrigoSyncPage() {
     () => queueForMonth.filter((row) => row.status === "Pending Corrigo Upload"),
     [queueForMonth]
   );
+
+  const monthOptions = useMemo(() => {
+    const months = new Set<string>([month, currentMonth()]);
+    for (const row of state?.workOrders ?? []) if (row.month) months.add(row.month);
+    for (const row of state?.queue ?? []) if (row.month) months.add(row.month);
+    return Array.from(months).sort().reverse();
+  }, [month, state]);
+
+  const batchEstimate = useMemo(() => {
+    const services = pendingQueueForMonth.length;
+    const photos = pendingQueueForMonth.reduce((sum, row) => sum + Math.min(Number(row.photoCount) || 0, 10), 0);
+    const estimatedSeconds = Math.ceil(services * 14 + photos * 0.4);
+    return {
+      services,
+      photos,
+      duration: formatDuration(estimatedSeconds),
+    };
+  }, [pendingQueueForMonth]);
+
+  const batchUploadCommand = useMemo(() => {
+    return (
+      `cd /Users/johnkling/fieldops-app && ` +
+      `npm run corrigo:upload-queue -- --month=${month} --all-pending --instant --os-search --use-last-drag --auto-drag --continuous --upload-settle-ms=4000 --close-finder-after-drag --close-finder-delay-ms=5000 --max-photos-per-drag=10`
+    );
+  }, [month]);
+
+  const recalibrateBatchUploadCommand = useMemo(() => {
+    return (
+      `cd /Users/johnkling/fieldops-app && ` +
+      `npm run corrigo:upload-queue -- --month=${month} --all-pending --os-search --use-last-drag --finder-selected-start --auto-drag --continuous --upload-settle-ms=4000 --close-finder-after-drag --close-finder-delay-ms=5000 --recalibrate-drag --max-photos-per-drag=10`
+    );
+  }, [month]);
+
+  async function copyCommand(command: string) {
+    try {
+      await navigator.clipboard.writeText(command);
+      setMessage("Upload command copied. Paste it into Terminal to start.");
+    } catch {
+      setError("Could not copy command. Select and copy it manually.");
+    }
+  }
 
   async function updateQueueStatus(queueId: string, status: string) {
     try {
@@ -256,12 +307,17 @@ export default function CorrigoSyncPage() {
       </div>
 
       <section style={{ display: "flex", gap: 10, flexWrap: "wrap", margin: "16px 0" }}>
-        <input
+        <select
           value={month}
           onChange={(e) => setMonth(e.target.value)}
-          placeholder="YYYY-MM"
           style={{ ...inputStyle, maxWidth: 180 }}
-        />
+        >
+          {monthOptions.map((option) => (
+            <option key={option} value={option}>
+              {option}
+            </option>
+          ))}
+        </select>
         <button type="button" onClick={() => load(month)} disabled={loading || saving} style={buttonStyle}>
           Refresh
         </button>
@@ -279,6 +335,50 @@ export default function CorrigoSyncPage() {
 
       {!loading && (
         <>
+          <section
+            style={{
+              position: "sticky",
+              top: 0,
+              zIndex: 5,
+              border: "1px solid #bfdbfe",
+              borderRadius: 8,
+              padding: 12,
+              background: "#eff6ff",
+              marginBottom: 16,
+              boxShadow: "0 4px 10px rgba(15, 23, 42, 0.08)",
+            }}
+          >
+            <div style={{ display: "flex", gap: 12, justifyContent: "space-between", flexWrap: "wrap" }}>
+              <div>
+                <h2 style={{ fontSize: 18, margin: "0 0 4px" }}>Instant Corrigo Batch</h2>
+                <div style={{ color: "#475569", fontSize: 13 }}>
+                  {batchEstimate.services} pending service(s), up to {batchEstimate.photos} photo(s), estimated {batchEstimate.duration}.
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <button type="button" onClick={() => copyCommand(batchUploadCommand)} style={buttonStyle}>
+                  Copy Instant Command
+                </button>
+                <button type="button" onClick={() => copyCommand(recalibrateBatchUploadCommand)} style={buttonStyle}>
+                  Copy Recalibrate Command
+                </button>
+              </div>
+            </div>
+            <code
+              style={{
+                display: "block",
+                marginTop: 10,
+                padding: 10,
+                background: "#fff",
+                borderRadius: 8,
+                overflowWrap: "anywhere",
+                fontSize: 12,
+              }}
+            >
+              {batchUploadCommand}
+            </code>
+          </section>
+
           <section style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: 14, marginBottom: 16 }}>
             <h2 style={{ fontSize: 18, margin: "0 0 10px" }}>Parse Corrigo Email</h2>
             <form onSubmit={parseEmail} style={{ display: "grid", gap: 10 }}>
@@ -354,6 +454,7 @@ export default function CorrigoSyncPage() {
               ["Upload groups", state?.uploadGroupCount ?? 0],
               ["Ready to queue", state?.queueCandidateCount ?? 0],
               ["Pending", pendingQueueForMonth.length],
+              ["Est. remaining", batchEstimate.duration],
               ["Queued total", queueForMonth.length],
             ].map(([label, value]) => (
               <div key={label} style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: 12 }}>

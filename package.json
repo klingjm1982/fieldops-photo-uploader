@@ -6,7 +6,11 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "corrigo:test-prepare": "node scripts/corrigo-automation-test.mjs",
+    "corrigo:test-browser": "node scripts/corrigo-browser-test.mjs",
+    "corrigo:os-drag": "node scripts/corrigo-os-drag.mjs",
+    "corrigo:upload-queue": "node scripts/corrigo-upload-queue.mjs"
   },
   "dependencies": {
     "@sendgrid/mail": "^8.1.6",
@@ -23,6 +27,7 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.1.4",
+    "playwright": "^1.61.0",
     "tailwindcss": "^4",
     "typescript": "^5"
   }
