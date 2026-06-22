@@ -141,7 +141,11 @@ function isSiteHeaderRow(siteId: string, address: string) {
 }
 
 function localDateParts(value: string, timeZone: string) {
-  const date = new Date(value);
+  const normalizedValue = value.trim().replace(
+    /^(20\d{2}-[01]\d-[0-3]\d)(\d{2}:\d{2})/,
+    "$1T$2"
+  );
+  const date = new Date(normalizedValue);
   if (Number.isNaN(date.getTime())) return null;
 
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -349,15 +353,17 @@ function parseUploads(rows: unknown[][], timeZone: string) {
   const months = new Set<string>();
 
   for (const r of body) {
-    const siteId = cell(r, siteIdIdx) || cell(r, addressFolderIdIdx);
+    const siteIds = Array.from(new Set([cell(r, siteIdIdx), cell(r, addressFolderIdIdx)].filter(Boolean)));
     const parts = localDateParts(cell(r, timestampIdx), timeZone);
-    if (!siteId || !parts) continue;
+    if (siteIds.length === 0 || !parts) continue;
 
     months.add(parts.month);
-    groups.add(`${parts.month}::${siteId}::${parts.date}`);
-    const monthSiteKey = `${parts.month}::${siteId}`;
-    const currentLast = lastUploadByMonthSite.get(monthSiteKey);
-    if (!currentLast || parts.date > currentLast) lastUploadByMonthSite.set(monthSiteKey, parts.date);
+    for (const siteId of siteIds) {
+      groups.add(`${parts.month}::${siteId}::${parts.date}`);
+      const monthSiteKey = `${parts.month}::${siteId}`;
+      const currentLast = lastUploadByMonthSite.get(monthSiteKey);
+      if (!currentLast || parts.date > currentLast) lastUploadByMonthSite.set(monthSiteKey, parts.date);
+    }
   }
 
   const completedByMonthSite = new Map<string, number>();
