@@ -28,6 +28,8 @@ type SiteRow = {
 
 const SUMMARY_TAB = "MonthlyServiceSummary";
 const MISSED_TAB = "MissedServices";
+const EXPECTATIONS_TAB = "MonthlyServiceExpectations";
+const EXPECTATIONS_HEADERS = ["month", "siteId", "expectedServices", "notes"];
 const SUMMARY_HEADERS = [
   "month",
   "siteId",
@@ -149,20 +151,37 @@ function rowToValues(row: MonthlyServiceRow) {
 async function ensureSheet(
   sheets: sheets_v4.Sheets,
   spreadsheetId: string,
-  title: string
+  title: string,
+  headers?: string[]
 ) {
   const meta = await sheets.spreadsheets.get({
     spreadsheetId,
     fields: "sheets.properties.title",
   });
   const exists = meta.data.sheets?.some((s) => s.properties?.title === title);
-  if (exists) return;
+  if (!exists) {
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: {
+        requests: [{ addSheet: { properties: { title } } }],
+      },
+    });
+  }
 
-  await sheets.spreadsheets.batchUpdate({
+  if (!headers) return;
+
+  const current = await sheets.spreadsheets.values.get({
     spreadsheetId,
-    requestBody: {
-      requests: [{ addSheet: { properties: { title } } }],
-    },
+    range: `${title}!A1:Z1`,
+  });
+
+  if ((current.data.values ?? []).length > 0) return;
+
+  await sheets.spreadsheets.values.update({
+    spreadsheetId,
+    range: `${title}!A1:${String.fromCharCode(64 + headers.length)}1`,
+    valueInputOption: "USER_ENTERED",
+    requestBody: { values: [headers] },
   });
 }
 
@@ -224,6 +243,28 @@ function parseSites(rows: unknown[][]): SiteRow[] {
     })
     .filter((s) => s.siteId && s.address && s.active)
     .filter((s) => !isSiteHeaderRow(s.siteId, s.address));
+}
+
+function parseMonthlyExpectations(rows: unknown[][]) {
+  const [maybeHeaders = [], ...remainingRows] = rows;
+  const headers = hasHeader(maybeHeaders, ["month", "expectedServices"]) ? maybeHeaders : [];
+  const body = headers.length > 0 ? remainingRows : rows;
+  const monthIdx = headerIndex(headers, ["month"], 0);
+  const siteIdx = headerIndex(headers, ["siteId", "folderId", "addressFolderId"], 1);
+  const expectedIdx = headerIndex(headers, ["expectedServices", "servicesPerMonth"], 2);
+  const expectations = new Map<string, number>();
+
+  for (const row of body) {
+    const month = cell(row, monthIdx);
+    const siteId = cell(row, siteIdx);
+    const expectedServices = parseNumber(cell(row, expectedIdx), -1);
+    if (!month || expectedServices < 0) continue;
+
+    const normalizedSiteId = siteId && !["all", "default", "*"].includes(siteId.toLowerCase()) ? siteId : "*";
+    expectations.set(`${month}::${normalizedSiteId}`, expectedServices);
+  }
+
+  return expectations;
 }
 
 function parseUploads(rows: unknown[][], timeZone: string) {
@@ -312,6 +353,11 @@ export async function refreshMonthlyServiceReport(monthParam?: string) {
     spreadsheetId,
     range: `${uploadsTab}!A:Z`,
   });
+  await ensureSheet(sheets, spreadsheetId, EXPECTATIONS_TAB, EXPECTATIONS_HEADERS);
+  const expectationsResp = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: `${EXPECTATIONS_TAB}!A:D`,
+  });
   let workOrdersResp;
   try {
     workOrdersResp = await sheets.spreadsheets.values.get({
@@ -323,6 +369,7 @@ export async function refreshMonthlyServiceReport(monthParam?: string) {
   }
 
   const sites = parseSites(sitesResp.data.values ?? []);
+  const expectations = parseMonthlyExpectations(expectationsResp.data.values ?? []);
   const uploads = parseUploads(uploadsResp.data.values ?? [], timeZone);
   const workOrders = parseWorkOrders(workOrdersResp.data.values ?? []);
   const months = monthParam
@@ -334,7 +381,10 @@ export async function refreshMonthlyServiceReport(monthParam?: string) {
       sites.map((site) => {
         const monthSiteKey = `${month}::${site.siteId}`;
         const completedServices = uploads.completedByMonthSite.get(monthSiteKey) ?? 0;
-        const expectedServices = site.expectedServices;
+        const expectedServices =
+          expectations.get(monthSiteKey) ??
+          expectations.get(`${month}::*`) ??
+          site.expectedServices;
         const missingServices = Math.max(expectedServices - completedServices, 0);
         const status: MonthlyStatus =
           completedServices >= expectedServices ? "OK" : completedServices > 0 ? "LOW" : "MISSING";
@@ -370,4 +420,64 @@ export async function refreshMonthlyServiceReport(monthParam?: string) {
   await replaceTab(sheets, spreadsheetId, MISSED_TAB, [SUMMARY_HEADERS, ...missed.map(rowToValues)]);
 
   return { month: monthParam || "", months, summary, missed };
+}
+
+export async function setMonthlyExpectedServices(params: {
+  month: string;
+  expectedServices: number;
+  siteId?: string;
+  notes?: string;
+}) {
+  const spreadsheetId = process.env.GOOGLE_SHEET_ID;
+  if (!spreadsheetId) throw new Error("Missing GOOGLE_SHEET_ID");
+
+  const month = params.month.trim();
+  const siteId = (params.siteId || "all").trim() || "all";
+  const expectedServices = Number(params.expectedServices);
+  if (!month) throw new Error("Missing month.");
+  if (!Number.isFinite(expectedServices) || expectedServices < 0) {
+    throw new Error("Expected services must be zero or greater.");
+  }
+
+  const sheets = await getSheetsClient();
+  await ensureSheet(sheets, spreadsheetId, EXPECTATIONS_TAB, EXPECTATIONS_HEADERS);
+
+  const valuesResp = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: `${EXPECTATIONS_TAB}!A:D`,
+  });
+  const values = valuesResp.data.values ?? [];
+  const [maybeHeaders = [], ...remainingRows] = values;
+  const headers = hasHeader(maybeHeaders, ["month", "expectedServices"])
+    ? maybeHeaders
+    : EXPECTATIONS_HEADERS;
+  const rows = hasHeader(maybeHeaders, ["month", "expectedServices"]) ? remainingRows : values;
+  const monthIdx = headerIndex(headers, ["month"], 0);
+  const siteIdx = headerIndex(headers, ["siteId"], 1);
+  const rowOffset = hasHeader(maybeHeaders, ["month", "expectedServices"]) ? 2 : 1;
+  const normalizedSiteId = siteId.toLowerCase();
+  const rowIndex = rows.findIndex(
+    (row) => cell(row, monthIdx) === month && cell(row, siteIdx).toLowerCase() === normalizedSiteId
+  );
+  const rowValues = [month, siteId, expectedServices, params.notes ?? ""];
+
+  if (rowIndex >= 0) {
+    const sheetRowNumber = rowIndex + rowOffset;
+    await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: `${EXPECTATIONS_TAB}!A${sheetRowNumber}:D${sheetRowNumber}`,
+      valueInputOption: "USER_ENTERED",
+      requestBody: { values: [rowValues] },
+    });
+  } else {
+    await sheets.spreadsheets.values.append({
+      spreadsheetId,
+      range: `${EXPECTATIONS_TAB}!A:D`,
+      valueInputOption: "USER_ENTERED",
+      insertDataOption: "INSERT_ROWS",
+      requestBody: { values: [rowValues] },
+    });
+  }
+
+  return refreshMonthlyServiceReport(month);
 }

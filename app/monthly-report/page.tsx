@@ -139,6 +139,9 @@ export default function MonthlyReportPage() {
   const [status, setStatus] = useState("");
   const [workOrderSearch, setWorkOrderSearch] = useState("");
   const [serviceRate, setServiceRate] = useState("");
+  const [expectedServicesOverride, setExpectedServicesOverride] = useState("");
+  const [savingExpectedServices, setSavingExpectedServices] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -320,6 +323,39 @@ export default function MonthlyReportPage() {
     ]);
   }
 
+  async function saveMonthlyExpectedServices() {
+    try {
+      setSavingExpectedServices(true);
+      setError(null);
+      setMessage(null);
+      const res = await fetch("/api/monthly-report", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "setMonthlyExpectedServices",
+          month,
+          siteId: "all",
+          expectedServices: Number(expectedServicesOverride),
+          notes: "Default for all active properties this month",
+        }),
+      });
+      const json = (await res.json().catch(() => ({}))) as Partial<ReportResponse> & {
+        message?: string;
+      };
+      if (!res.ok) throw new Error(json.message ?? `HTTP ${res.status}`);
+
+      const nextRows = Array.isArray(json.summary) ? json.summary : [];
+      const nextMonths = Array.isArray(json.months) ? json.months : unique(nextRows.map((r) => r.month));
+      setRows(nextRows);
+      setMonths(nextMonths);
+      setMessage(`Expected services for ${month} saved as ${expectedServicesOverride}.`);
+    } catch (e: unknown) {
+      setError(errorMessage(e) || "Failed to save expected services");
+    } finally {
+      setSavingExpectedServices(false);
+    }
+  }
+
   const controlStyle: React.CSSProperties = {
     minWidth: 160,
     flex: "1 1 160px",
@@ -364,6 +400,7 @@ export default function MonthlyReportPage() {
       </div>
 
       {loading && <p>Refreshing monthly service summary from Google Sheets...</p>}
+      {!loading && message && <p style={{ color: "#166534", fontWeight: 800 }}>{message}</p>}
       {!loading && error && <p style={{ color: "crimson" }}>Error loading report: {error}</p>}
 
       {!loading && !error && (
@@ -443,6 +480,42 @@ export default function MonthlyReportPage() {
               <option value="LOW">LOW</option>
               <option value="MISSING">MISSING</option>
             </select>
+          </section>
+
+          <section
+            style={{
+              display: "flex",
+              gap: 10,
+              flexWrap: "wrap",
+              alignItems: "center",
+              marginBottom: 16,
+              padding: 12,
+              background: "#fff",
+              border: "1px solid #dbeafe",
+              borderRadius: 8,
+            }}
+          >
+            <div style={{ flex: "1 1 260px" }}>
+              <div style={{ fontWeight: 900 }}>Monthly Expected Services</div>
+              <div style={{ color: "#64748b", fontSize: 13 }}>
+                Sets the default expected services for all active properties in {month}.
+              </div>
+            </div>
+            <input
+              value={expectedServicesOverride}
+              onChange={(e) => setExpectedServicesOverride(e.target.value)}
+              placeholder="Example: 3"
+              inputMode="numeric"
+              style={{ ...controlStyle, flex: "0 1 140px", minWidth: 140 }}
+            />
+            <button
+              type="button"
+              onClick={saveMonthlyExpectedServices}
+              disabled={savingExpectedServices || !month || expectedServicesOverride === ""}
+              style={{ ...controlStyle, flex: "0 1 230px", fontWeight: 800, cursor: "pointer" }}
+            >
+              Save Expected For Month
+            </button>
           </section>
 
           <section

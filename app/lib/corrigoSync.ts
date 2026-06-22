@@ -176,6 +176,14 @@ function queueIdFor(group: UploadGroup, workOrderNumber: string) {
   return [group.month, group.siteId, group.serviceDate, workOrderNumber].join("__");
 }
 
+function workOrdersMonthTab(month: string) {
+  return `CorrigoWorkOrders ${month}`;
+}
+
+function workOrderKey(row: Pick<CorrigoWorkOrder, "month" | "siteId" | "workOrderNumber">) {
+  return [row.month, row.siteId, row.workOrderNumber].join("__");
+}
+
 function splitLines(value: string) {
   return value
     .split(/\n+/)
@@ -580,15 +588,43 @@ export async function getCorrigoSyncState(monthParam?: string) {
 export async function addCorrigoWorkOrder(row: CorrigoWorkOrder) {
   const sheets = await getSheetsClient();
   await ensureSheet(sheets, WORK_ORDERS_TAB, WORK_ORDER_HEADERS);
-  await sheets.spreadsheets.values.append({
-    spreadsheetId: spreadsheetId(),
-    range: `${WORK_ORDERS_TAB}!A:F`,
-    valueInputOption: "USER_ENTERED",
-    insertDataOption: "INSERT_ROWS",
-    requestBody: {
-      values: [[row.month, row.siteId, row.address, row.workOrderNumber, row.active ? "Y" : "N", row.notes]],
-    },
-  });
+
+  const monthTab = workOrdersMonthTab(row.month);
+  await ensureSheet(sheets, monthTab, WORK_ORDER_HEADERS);
+
+  const rowValues = [row.month, row.siteId, row.address, row.workOrderNumber, row.active ? "Y" : "N", row.notes];
+  const key = workOrderKey(row);
+  const masterRows = parseWorkOrders(await readValues(sheets, WORK_ORDERS_TAB));
+  const monthRows = parseWorkOrders(await readValues(sheets, monthTab));
+  const added = {
+    master: false,
+    monthTab: false,
+    monthTabName: monthTab,
+  };
+
+  if (!masterRows.some((existing) => workOrderKey(existing) === key)) {
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: spreadsheetId(),
+      range: `${WORK_ORDERS_TAB}!A:F`,
+      valueInputOption: "USER_ENTERED",
+      insertDataOption: "INSERT_ROWS",
+      requestBody: { values: [rowValues] },
+    });
+    added.master = true;
+  }
+
+  if (!monthRows.some((existing) => workOrderKey(existing) === key)) {
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: spreadsheetId(),
+      range: `${monthTab}!A:F`,
+      valueInputOption: "USER_ENTERED",
+      insertDataOption: "INSERT_ROWS",
+      requestBody: { values: [rowValues] },
+    });
+    added.monthTab = true;
+  }
+
+  return added;
 }
 
 export async function addCorrigoWorkOrderFromEmail(params: { subject: string; body: string }) {
@@ -609,7 +645,7 @@ export async function addCorrigoWorkOrderFromEmail(params: { subject: string; bo
     };
   }
 
-  await addCorrigoWorkOrder({
+  const added = await addCorrigoWorkOrder({
     month: parsed.month,
     siteId: match.siteId,
     address: match.address,
@@ -620,7 +656,7 @@ export async function addCorrigoWorkOrderFromEmail(params: { subject: string; bo
       .join(" | "),
   });
 
-  return { ok: true, parsed, site: match };
+  return { ok: true, parsed, site: match, added };
 }
 
 export async function buildCorrigoQueue(monthParam?: string) {

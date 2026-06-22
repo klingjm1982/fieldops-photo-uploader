@@ -15,6 +15,21 @@ function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
+class UnauthorizedError extends Error {}
+
+function requireGmailSecret(req: Request, body: Record<string, unknown>) {
+  const expected = process.env.CORRIGO_GMAIL_SECRET;
+  if (!expected) return;
+
+  const provided =
+    req.headers.get("x-fieldops-secret") ||
+    (typeof body.secret === "string" ? body.secret : "");
+
+  if (provided !== expected) {
+    throw new UnauthorizedError("Invalid Gmail routing secret.");
+  }
+}
+
 export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
@@ -71,6 +86,29 @@ export async function POST(req: Request) {
       return NextResponse.json(result, { status: result.ok ? 200 : 422 });
     }
 
+    if (action === "parseEmailBatch") {
+      requireGmailSecret(req, body);
+      const emails = Array.isArray(body.emails) ? body.emails : [];
+      const results = [];
+
+      for (const email of emails) {
+        const item = email && typeof email === "object" ? (email as Record<string, unknown>) : {};
+        results.push(
+          await addCorrigoWorkOrderFromEmail({
+            subject: String(item.subject ?? ""),
+            body: String(item.emailBody ?? item.body ?? ""),
+          })
+        );
+      }
+
+      return NextResponse.json({
+        ok: true,
+        processed: results.length,
+        accepted: results.filter((result) => result.ok).length,
+        results,
+      });
+    }
+
     if (action === "updateQueueStatus") {
       const result = await updateCorrigoQueueStatus({
         queueId: String(body.queueId ?? "").trim(),
@@ -82,6 +120,10 @@ export async function POST(req: Request) {
 
     return NextResponse.json({ message: "Unknown action" }, { status: 400 });
   } catch (error: unknown) {
+    if (error instanceof UnauthorizedError) {
+      return NextResponse.json({ message: error.message }, { status: 401 });
+    }
+
     console.error("Corrigo sync action error:", error);
     return NextResponse.json(
       { error: "Corrigo sync action error", message: errorMessage(error) },
