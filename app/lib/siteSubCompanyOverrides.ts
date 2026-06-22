@@ -8,6 +8,10 @@ export type SubCompanyOverride = {
 
 const DEFAULT_OVERRIDE_TAB = "Site List W/WO's";
 
+export function workOrderSiteListTab() {
+  return DEFAULT_OVERRIDE_TAB;
+}
+
 function normalizeHeader(value: unknown) {
   return String(value ?? "")
     .trim()
@@ -33,7 +37,7 @@ function cell(row: unknown[], index: number) {
   return String(row[index] ?? "").trim();
 }
 
-function quoteSheetTitle(title: string) {
+export function quoteSheetTitle(title: string) {
   return `'${title.replace(/'/g, "''")}'`;
 }
 
@@ -59,7 +63,7 @@ export async function readSubCompanyOverrides(
   sheets: sheets_v4.Sheets,
   spreadsheetId: string
 ) {
-  const tab = process.env.GOOGLE_SITE_WORK_ORDERS_TAB || DEFAULT_OVERRIDE_TAB;
+  const tab = workOrderSiteListTab();
 
   try {
     const resp = await sheets.spreadsheets.values.get({

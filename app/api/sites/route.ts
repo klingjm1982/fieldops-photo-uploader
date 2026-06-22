@@ -4,6 +4,8 @@ import { readServiceAccount } from "@/app/lib/googleServiceAccount";
 import {
   readSubCompanyOverrides,
   subCompanyForSite,
+  quoteSheetTitle,
+  workOrderSiteListTab,
 } from "@/app/lib/siteSubCompanyOverrides";
 
 export const runtime = "nodejs";
@@ -84,7 +86,7 @@ function errorMessage(error: unknown) {
 export async function GET() {
   try {
     const sheetId = process.env.GOOGLE_SHEET_ID;
-    const tab = process.env.GOOGLE_SHEET_TAB || "Sites";
+    const tab = workOrderSiteListTab();
 
     if (!sheetId) {
       return NextResponse.json({ error: "Missing GOOGLE_SHEET_ID" }, { status: 500 });
@@ -94,7 +96,7 @@ export async function GET() {
 
     const resp = await sheets.spreadsheets.values.get({
       spreadsheetId: sheetId,
-      range: `${tab}!A:Z`,
+      range: `${quoteSheetTitle(tab)}!A:Z`,
     });
     const subCompanyOverrides = await readSubCompanyOverrides(sheets, sheetId);
 
@@ -108,6 +110,7 @@ export async function GET() {
       "folderId",
       "active",
       "servicesPerMonth",
+      "Subcontractor company",
     ];
     const headers = hasHeader(maybeHeaders, knownHeaders) ? maybeHeaders : [];
     const body = headers.length > 0 ? remainingRows : rows;
@@ -117,7 +120,11 @@ export async function GET() {
     const activeIdx = headerIndex(headers, ["active", "isActive"], 2);
     const marketIdx = headerIndex(headers, ["market"], 3);
     const clientIdx = headerIndex(headers, ["clientName", "client"], -1);
-    const subCompanyIdx = headerIndex(headers, ["subCompany", "subCompanyName"], marketIdx);
+    const subCompanyIdx = headerIndex(
+      headers,
+      ["Subcontractor company", "subcontractorCompany", "subCompany", "subCompanyName"],
+      10
+    );
     const servicesIdx = headerIndex(headers, ["servicesPerMonth", "expectedServices"], -1);
 
     const sites: Site[] = body

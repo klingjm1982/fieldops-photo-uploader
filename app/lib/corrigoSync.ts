@@ -1,6 +1,10 @@
 import { google, sheets_v4 } from "googleapis";
 import { parseCorrigoWorkOrderEmail } from "@/app/lib/corrigoEmailParser";
 import { readServiceAccount } from "@/app/lib/googleServiceAccount";
+import {
+  quoteSheetTitle,
+  workOrderSiteListTab,
+} from "@/app/lib/siteSubCompanyOverrides";
 
 export type CorrigoWorkOrder = {
   month: string;
@@ -508,13 +512,12 @@ function parseSites(rows: unknown[][]): SiteMatch[] {
 }
 
 async function readSites(sheets: sheets_v4.Sheets) {
-  const sitesTab = process.env.GOOGLE_SHEET_TAB || "Sites";
-  try {
-    return parseSites(await readValues(sheets, sitesTab));
-  } catch (error) {
-    if (sitesTab !== "Sheet1") throw error;
-    return parseSites(await readValues(sheets, "Sites"));
-  }
+  const sitesTab = workOrderSiteListTab();
+  const resp = await sheets.spreadsheets.values.get({
+    spreadsheetId: spreadsheetId(),
+    range: `${quoteSheetTitle(sitesTab)}!A:Z`,
+  });
+  return parseSites(resp.data.values ?? []);
 }
 
 function findSiteByAddress(sites: SiteMatch[], address: string) {

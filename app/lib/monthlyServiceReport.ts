@@ -1,8 +1,10 @@
 import { google, sheets_v4 } from "googleapis";
 import { readServiceAccount } from "@/app/lib/googleServiceAccount";
 import {
+  quoteSheetTitle,
   readSubCompanyOverrides,
   subCompanyForSite,
+  workOrderSiteListTab,
 } from "@/app/lib/siteSubCompanyOverrides";
 
 export type MonthlyStatus = "OK" | "LOW" | "MISSING";
@@ -219,6 +221,7 @@ function parseSites(rows: unknown[][]): SiteRow[] {
     "folderId",
     "active",
     "servicesPerMonth",
+    "Subcontractor company",
   ];
   const headers = hasHeader(maybeHeaders, knownHeaders) ? maybeHeaders : [];
   const body = headers.length > 0 ? remainingRows : rows;
@@ -227,7 +230,11 @@ function parseSites(rows: unknown[][]): SiteRow[] {
   const siteIdIdx = headerIndex(headers, ["siteId"], folderIdx);
   const activeIdx = headerIndex(headers, ["active", "isActive"], 2);
   const clientIdx = headerIndex(headers, ["clientName", "client"], -1);
-  const subCompanyIdx = headerIndex(headers, ["subCompany", "subCompanyName", "market"], 3);
+  const subCompanyIdx = headerIndex(
+    headers,
+    ["Subcontractor company", "subcontractorCompany", "subCompany", "subCompanyName", "market"],
+    10
+  );
   const expectedIdx = headerIndex(
     headers,
     ["servicesPerMonth", "expectedServices", "expectedServicesPerMonth"],
@@ -333,7 +340,7 @@ function parseWorkOrders(rows: unknown[][]) {
 
 export async function refreshMonthlyServiceReport(monthParam?: string) {
   const spreadsheetId = process.env.GOOGLE_SHEET_ID;
-  const sitesTab = process.env.GOOGLE_SHEET_TAB || "Sites";
+  const sitesTab = workOrderSiteListTab();
   const uploadsTab = process.env.GOOGLE_UPLOADS_TAB || "UploadsLog";
   const workOrdersTab = "CorrigoWorkOrders";
   const timeZone = process.env.SERVICE_TIME_ZONE || "America/Chicago";
@@ -341,19 +348,10 @@ export async function refreshMonthlyServiceReport(monthParam?: string) {
   if (!spreadsheetId) throw new Error("Missing GOOGLE_SHEET_ID");
 
   const sheets = await getSheetsClient();
-  let sitesResp;
-  try {
-    sitesResp = await sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: `${sitesTab}!A:Z`,
-    });
-  } catch (error) {
-    if (sitesTab !== "Sheet1") throw error;
-    sitesResp = await sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: "Sites!A:Z",
-    });
-  }
+  const sitesResp = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: `${quoteSheetTitle(sitesTab)}!A:Z`,
+  });
 
   const uploadsResp = await sheets.spreadsheets.values.get({
     spreadsheetId,
