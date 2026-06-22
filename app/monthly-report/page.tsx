@@ -13,6 +13,7 @@ type MonthlyServiceRow = {
   address: string;
   clientName: string;
   subCompany: string;
+  subEmail?: string;
   expectedServices: number;
   completedServices: number;
   missingServices: number;
@@ -133,6 +134,10 @@ function money(value: number) {
   return value.toFixed(2);
 }
 
+function rowKey(row: MonthlyServiceRow) {
+  return [row.month, row.siteId, row.workOrderNumber || row.address].join("::");
+}
+
 export default function MonthlyReportPage() {
   const [rows, setRows] = useState<MonthlyServiceRow[]>([]);
   const [months, setMonths] = useState<string[]>([]);
@@ -148,6 +153,9 @@ export default function MonthlyReportPage() {
   const [expectedServicesOverride, setExpectedServicesOverride] = useState("");
   const [savingExpectedServices, setSavingExpectedServices] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [selectedReminderKeys, setSelectedReminderKeys] = useState<string[]>([]);
+  const [sendingReminders, setSendingReminders] = useState(false);
+  const [reminderPreview, setReminderPreview] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -202,6 +210,11 @@ export default function MonthlyReportPage() {
       );
     });
   }, [rows, month, state, clientName, subCompany, status, workOrderSearch]);
+
+  const selectedReminderRows = useMemo(() => {
+    const selected = new Set(selectedReminderKeys);
+    return filteredRows.filter((row) => selected.has(rowKey(row)));
+  }, [filteredRows, selectedReminderKeys]);
 
   const totals = useMemo(() => {
     return filteredRows.reduce(
@@ -307,6 +320,7 @@ export default function MonthlyReportPage() {
         "address",
         "clientName",
         "subCompany",
+        "subEmail",
         "expectedServices",
         "completedServices",
         "missingServices",
@@ -323,6 +337,7 @@ export default function MonthlyReportPage() {
         row.address,
         row.clientName,
         row.subCompany,
+        row.subEmail || "",
         row.expectedServices,
         row.completedServices,
         row.missingServices,
@@ -333,6 +348,67 @@ export default function MonthlyReportPage() {
         row.siteId,
       ]),
     ]);
+  }
+
+  function reminderPayload(rowsToSend = selectedReminderRows) {
+    return {
+      month,
+      generatedAt: new Date().toISOString(),
+      uploadLink: "https://fieldops-photo-uploader.vercel.app/",
+      reminders: rowsToSend.map((row) => ({
+        to: row.subEmail || "",
+        subCompany: row.subCompany,
+        address: row.address,
+        workOrderNumber: row.workOrderNumber || "",
+        month: row.month,
+        status: row.status,
+        expectedServices: row.expectedServices,
+        completedServices: row.completedServices,
+        missingServices: row.missingServices,
+      })),
+    };
+  }
+
+  function previewReminderBatch(rowsToPreview = selectedReminderRows) {
+    const payload = reminderPayload(rowsToPreview);
+    setReminderPreview(JSON.stringify(payload, null, 2));
+    setMessage(`Prepared ${payload.reminders.length} reminder(s) for review.`);
+  }
+
+  async function copyReminderPayload() {
+    const payloadText = JSON.stringify(reminderPayload(), null, 2);
+    await navigator.clipboard.writeText(payloadText);
+    setReminderPreview(payloadText);
+    setMessage("Reminder payload copied.");
+  }
+
+  async function sendReminders() {
+    try {
+      setSendingReminders(true);
+      setError(null);
+      setMessage(null);
+      const payload = reminderPayload();
+      const res = await fetch("/api/photo-reminders", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.message ?? `HTTP ${res.status}`);
+      setReminderPreview(JSON.stringify(json, null, 2));
+      setMessage(json.configured ? "Reminder request sent." : "Reminder sender is not configured yet.");
+    } catch (e: unknown) {
+      setError(errorMessage(e) || "Failed to send reminders");
+    } finally {
+      setSendingReminders(false);
+    }
+  }
+
+  function toggleReminder(row: MonthlyServiceRow) {
+    const key = rowKey(row);
+    setSelectedReminderKeys((current) =>
+      current.includes(key) ? current.filter((item) => item !== key) : [...current, key]
+    );
   }
 
   async function saveMonthlyExpectedServices() {
@@ -496,6 +572,85 @@ export default function MonthlyReportPage() {
 
           <section
             style={{
+              marginBottom: 16,
+              padding: 12,
+              background: "#fff",
+              border: "1px solid #e5e7eb",
+              borderRadius: 8,
+            }}
+          >
+            <div style={{ display: "flex", gap: 12, justifyContent: "space-between", flexWrap: "wrap" }}>
+              <div>
+                <h2 style={{ fontSize: 18, margin: "0 0 4px" }}>Photo Reminder Emails</h2>
+                <div style={{ color: "#64748b", fontSize: 13 }}>
+                  Select rows below, preview the reminder batch, then send through the FIELD OPS Gmail Apps Script.
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <button
+                  type="button"
+                  onClick={() => setSelectedReminderKeys(filteredRows.map(rowKey))}
+                  style={controlStyle}
+                >
+                  Select all filtered
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setSelectedReminderKeys(
+                      filteredRows
+                        .filter((row) => (row.status === "LOW" || row.status === "MISSING") && row.subEmail)
+                        .map(rowKey)
+                    )
+                  }
+                  style={controlStyle}
+                >
+                  Select LOW/MISSING
+                </button>
+                <button type="button" onClick={() => setSelectedReminderKeys([])} style={controlStyle}>
+                  Clear selected
+                </button>
+              </div>
+            </div>
+            <div style={{ marginTop: 10, color: "#475569", fontSize: 13 }}>
+              {selectedReminderRows.length} selected, {selectedReminderRows.filter((row) => row.subEmail).length} with email.
+            </div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
+              <button type="button" onClick={() => previewReminderBatch()} style={controlStyle}>
+                Preview Selected
+              </button>
+              <button type="button" onClick={copyReminderPayload} style={controlStyle}>
+                Copy Apps Script Payload
+              </button>
+              <button
+                type="button"
+                onClick={sendReminders}
+                disabled={sendingReminders || selectedReminderRows.length === 0}
+                style={controlStyle}
+              >
+                Send Selected Reminders
+              </button>
+            </div>
+            {reminderPreview && (
+              <textarea
+                value={reminderPreview}
+                readOnly
+                rows={8}
+                style={{
+                  width: "100%",
+                  marginTop: 10,
+                  padding: 10,
+                  border: "1px solid #d7dce2",
+                  borderRadius: 8,
+                  fontFamily: "monospace",
+                  fontSize: 12,
+                }}
+              />
+            )}
+          </section>
+
+          <section
+            style={{
               display: "flex",
               gap: 10,
               flexWrap: "wrap",
@@ -632,16 +787,18 @@ export default function MonthlyReportPage() {
           </section>
 
           <div style={{ overflowX: "auto", border: "1px solid #e5e7eb", borderRadius: 8, background: "#fff" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1080 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1260 }}>
               <thead>
                 <tr style={{ background: "#eaf1f8" }}>
                   {[
+                    "Send",
                     "Month",
                     "Status",
                     "Work Order",
                     "Address",
                     "Client",
                     "Sub-company",
+                    "Email",
                     "Expected",
                     "Completed",
                     "Missing",
@@ -665,8 +822,17 @@ export default function MonthlyReportPage() {
               <tbody>
                 {filteredRows.map((row) => {
                   const colors = statusColors[row.status];
+                  const key = rowKey(row);
                   return (
-                    <tr key={`${row.month}-${row.siteId}`}>
+                    <tr key={key}>
+                      <td style={{ padding: 12, borderBottom: "1px solid #eef2f7" }}>
+                        <input
+                          type="checkbox"
+                          checked={selectedReminderKeys.includes(key)}
+                          onChange={() => toggleReminder(row)}
+                          aria-label={`Select reminder for ${row.address}`}
+                        />
+                      </td>
                       <td style={{ padding: 12, borderBottom: "1px solid #eef2f7" }}>{row.month}</td>
                       <td style={{ padding: 12, borderBottom: "1px solid #eef2f7" }}>
                         <span
@@ -698,6 +864,9 @@ export default function MonthlyReportPage() {
                         {row.subCompany || "-"}
                       </td>
                       <td style={{ padding: 12, borderBottom: "1px solid #eef2f7" }}>
+                        {row.subEmail || "-"}
+                      </td>
+                      <td style={{ padding: 12, borderBottom: "1px solid #eef2f7" }}>
                         {row.expectedServices}
                       </td>
                       <td style={{ padding: 12, borderBottom: "1px solid #eef2f7" }}>
@@ -725,7 +894,7 @@ export default function MonthlyReportPage() {
                 })}
                 {filteredRows.length === 0 && (
                   <tr>
-                    <td colSpan={11} style={{ padding: 18, textAlign: "center", color: "#667085" }}>
+                    <td colSpan={13} style={{ padding: 18, textAlign: "center", color: "#667085" }}>
                       No properties match these filters.
                     </td>
                   </tr>

@@ -19,6 +19,7 @@ export type MonthlyServiceRow = {
   address: string;
   clientName: string;
   subCompany: string;
+  subEmail: string;
   expectedServices: number;
   completedServices: number;
   missingServices: number;
@@ -34,6 +35,7 @@ type SiteRow = {
   address: string;
   clientName: string;
   subCompany: string;
+  subEmail: string;
   expectedServices: number;
   subPrice: number;
   workOrdersByMonth: Map<string, string>;
@@ -51,6 +53,7 @@ const SUMMARY_HEADERS = [
   "address",
   "clientName",
   "subCompany",
+  "subEmail",
   "expectedServices",
   "completedServices",
   "missingServices",
@@ -191,6 +194,7 @@ function rowToValues(row: MonthlyServiceRow) {
     row.address,
     row.clientName,
     row.subCompany,
+    row.subEmail,
     row.expectedServices,
     row.completedServices,
     row.missingServices,
@@ -247,11 +251,11 @@ async function replaceTab(
   await ensureSheet(sheets, spreadsheetId, title);
   await sheets.spreadsheets.values.clear({
     spreadsheetId,
-    range: `${title}!A:M`,
+    range: `${title}!A:N`,
   });
   await sheets.spreadsheets.values.update({
     spreadsheetId,
-    range: `${title}!A1:M${Math.max(rows.length, 1)}`,
+    range: `${title}!A1:N${Math.max(rows.length, 1)}`,
     valueInputOption: "USER_ENTERED",
     requestBody: { values: rows },
   });
@@ -288,6 +292,14 @@ function parseSites(rows: unknown[][]): SiteRow[] {
     ["Subcontractor company", "subcontractorCompany", "subCompany", "subCompanyName", "market"],
     10
   );
+  const subEmailIdx = firstHeaderIndex(
+    headers,
+    [
+      ["emailAddress", "email address"],
+      ["subEmail", "subcontractorEmail", "subcontractor email"],
+    ],
+    -1
+  );
   const expectedIdx = headerIndex(
     headers,
     ["servicesPerMonth", "expectedServices", "expectedServicesPerMonth"],
@@ -315,6 +327,7 @@ function parseSites(rows: unknown[][]): SiteRow[] {
         address: cell(r, addressIdx),
         clientName: cell(r, clientIdx) || "Driven Brands",
         subCompany: cell(r, subCompanyIdx),
+        subEmail: cell(r, subEmailIdx),
         expectedServices: parseNumber(cell(r, expectedIdx), 0),
         subPrice: parseNumber(cell(r, subPriceIdx), 0),
         workOrdersByMonth,
@@ -494,6 +507,7 @@ export async function refreshMonthlyServiceReport(monthParam?: string) {
             { folderId: site.folderId, siteId: site.siteId, address: site.address },
             site.subCompany
           ),
+          subEmail: site.subEmail,
           expectedServices,
           completedServices,
           missingServices,
