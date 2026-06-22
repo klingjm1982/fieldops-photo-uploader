@@ -523,7 +523,7 @@ async function readSites(sheets: sheets_v4.Sheets) {
   const sitesTab = workOrderSiteListTab();
   const resp = await sheets.spreadsheets.values.get({
     spreadsheetId: spreadsheetId(),
-    range: `${quoteSheetTitle(sitesTab)}!A:Z`,
+    range: `${quoteSheetTitle(sitesTab)}!A:AZ`,
   });
   return parseSites(resp.data.values ?? []);
 }

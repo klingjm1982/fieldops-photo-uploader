@@ -100,7 +100,7 @@ export async function GET() {
 
     const resp = await sheets.spreadsheets.values.get({
       spreadsheetId: sheetId,
-      range: `${quoteSheetTitle(tab)}!A:Z`,
+      range: `${quoteSheetTitle(tab)}!A:AZ`,
     });
     const subCompanyOverrides = await readSubCompanyOverrides(sheets, sheetId);
 

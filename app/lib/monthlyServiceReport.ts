@@ -396,7 +396,7 @@ export async function refreshMonthlyServiceReport(monthParam?: string) {
   const sheets = await getSheetsClient();
   const sitesResp = await sheets.spreadsheets.values.get({
     spreadsheetId,
-    range: `${quoteSheetTitle(sitesTab)}!A:Z`,
+    range: `${quoteSheetTitle(sitesTab)}!A:AZ`,
   });
 
   const uploadsResp = await sheets.spreadsheets.values.get({
