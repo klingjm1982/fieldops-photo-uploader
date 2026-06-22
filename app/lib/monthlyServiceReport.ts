@@ -1,6 +1,7 @@
 import { google, sheets_v4 } from "googleapis";
 import { readServiceAccount } from "@/app/lib/googleServiceAccount";
 import {
+  firstHeaderIndex,
   quoteSheetTitle,
   readSubCompanyOverrides,
   subCompanyForSite,
@@ -225,10 +226,17 @@ function parseSites(rows: unknown[][]): SiteRow[] {
   ];
   const headers = hasHeader(maybeHeaders, knownHeaders) ? maybeHeaders : [];
   const body = headers.length > 0 ? remainingRows : rows;
-  const addressIdx = headerIndex(headers, ["address", "displayName", "siteAddress"], 0);
+  const addressIdx = firstHeaderIndex(
+    headers,
+    [
+      ["fullAddress", "full address"],
+      ["address", "displayName", "siteAddress", "address1", "address 1"],
+    ],
+    0
+  );
   const folderIdx = headerIndex(headers, ["folderId", "addressFolderId", "driveFolderId"], 1);
   const siteIdIdx = headerIndex(headers, ["siteId"], folderIdx);
-  const activeIdx = headerIndex(headers, ["active", "isActive"], 2);
+  const activeIdx = headerIndex(headers, ["active", "isActive"], -1);
   const clientIdx = headerIndex(headers, ["clientName", "client"], -1);
   const subCompanyIdx = headerIndex(
     headers,
@@ -248,7 +256,7 @@ function parseSites(rows: unknown[][]): SiteRow[] {
         siteId,
         folderId: cell(r, folderIdx),
         address: cell(r, addressIdx),
-        clientName: cell(r, clientIdx),
+        clientName: cell(r, clientIdx) || "Driven Brands",
         subCompany: cell(r, subCompanyIdx),
         expectedServices: parseNumber(cell(r, expectedIdx), 0),
         active: parseActive(cell(r, activeIdx)),

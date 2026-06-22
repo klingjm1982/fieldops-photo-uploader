@@ -37,6 +37,14 @@ function cell(row: unknown[], index: number) {
   return String(row[index] ?? "").trim();
 }
 
+export function firstHeaderIndex(headers: unknown[], groups: string[][], fallback: number) {
+  for (const names of groups) {
+    const index = headerIndex(headers, names, -1);
+    if (index >= 0) return index;
+  }
+  return fallback;
+}
+
 export function quoteSheetTitle(title: string) {
   return `'${title.replace(/'/g, "''")}'`;
 }
@@ -83,7 +91,14 @@ export function parseSubCompanyOverrides(rows: unknown[][]): SubCompanyOverride[
     ? maybeHeaders
     : [];
   const body = headers.length > 0 ? remainingRows : rows;
-  const addressIdx = headerIndex(headers, ["address", "displayName", "siteAddress"], 0);
+  const addressIdx = firstHeaderIndex(
+    headers,
+    [
+      ["fullAddress", "full address"],
+      ["address", "displayName", "siteAddress", "address1", "address 1"],
+    ],
+    0
+  );
   const folderIdx = headerIndex(headers, ["folderId", "addressFolderId", "driveFolderId", "siteId"], 1);
   const subCompanyIdx = headerIndex(
     headers,

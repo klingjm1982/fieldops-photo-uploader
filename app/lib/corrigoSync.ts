@@ -2,6 +2,7 @@ import { google, sheets_v4 } from "googleapis";
 import { parseCorrigoWorkOrderEmail } from "@/app/lib/corrigoEmailParser";
 import { readServiceAccount } from "@/app/lib/googleServiceAccount";
 import {
+  firstHeaderIndex,
   quoteSheetTitle,
   workOrderSiteListTab,
 } from "@/app/lib/siteSubCompanyOverrides";
@@ -495,10 +496,17 @@ function parseSites(rows: unknown[][]): SiteMatch[] {
   const [maybeHeaders = [], ...remainingRows] = rows;
   const headers = hasHeader(maybeHeaders, ["address", "siteId", "folderId"]) ? maybeHeaders : [];
   const body = headers.length > 0 ? remainingRows : rows;
-  const addressIdx = headerIndex(headers, ["address", "displayName", "siteAddress"], 0);
+  const addressIdx = firstHeaderIndex(
+    headers,
+    [
+      ["fullAddress", "full address"],
+      ["address", "displayName", "siteAddress", "address1", "address 1"],
+    ],
+    0
+  );
   const folderIdx = headerIndex(headers, ["folderId", "addressFolderId", "driveFolderId"], 1);
   const siteIdIdx = headerIndex(headers, ["siteId"], folderIdx);
-  const activeIdx = headerIndex(headers, ["active", "isActive"], 2);
+  const activeIdx = headerIndex(headers, ["active", "isActive"], -1);
 
   return body
     .map((row) => ({

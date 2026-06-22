@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { google } from "googleapis";
 import { readServiceAccount } from "@/app/lib/googleServiceAccount";
 import {
+  firstHeaderIndex,
   readSubCompanyOverrides,
   subCompanyForSite,
   quoteSheetTitle,
@@ -114,10 +115,17 @@ export async function GET() {
     ];
     const headers = hasHeader(maybeHeaders, knownHeaders) ? maybeHeaders : [];
     const body = headers.length > 0 ? remainingRows : rows;
-    const addressIdx = headerIndex(headers, ["address", "displayName", "siteAddress"], 0);
+    const addressIdx = firstHeaderIndex(
+      headers,
+      [
+        ["fullAddress", "full address"],
+        ["address", "displayName", "siteAddress", "address1", "address 1"],
+      ],
+      0
+    );
     const folderIdx = headerIndex(headers, ["folderId", "addressFolderId", "driveFolderId"], 1);
     const siteIdIdx = headerIndex(headers, ["siteId"], folderIdx);
-    const activeIdx = headerIndex(headers, ["active", "isActive"], 2);
+    const activeIdx = headerIndex(headers, ["active", "isActive"], -1);
     const marketIdx = headerIndex(headers, ["market"], 3);
     const clientIdx = headerIndex(headers, ["clientName", "client"], -1);
     const subCompanyIdx = headerIndex(
@@ -145,7 +153,7 @@ export async function GET() {
           folderId,
           active,
           market,
-          clientName: cell(r, clientIdx),
+          clientName: cell(r, clientIdx) || "Driven Brands",
           subCompany: subCompanyForSite(
             subCompanyOverrides,
             { folderId, siteId, address },
