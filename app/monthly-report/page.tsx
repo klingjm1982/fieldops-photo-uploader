@@ -109,6 +109,24 @@ function stateFromAddress(address: string) {
   return state;
 }
 
+function csvValue(value: unknown) {
+  const text = String(value ?? "");
+  return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+function downloadCsv(filename: string, rows: unknown[][]) {
+  const csv = rows.map((row) => row.map(csvValue).join(",")).join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
 export default function MonthlyReportPage() {
   const [rows, setRows] = useState<MonthlyServiceRow[]>([]);
   const [months, setMonths] = useState<string[]>([]);
@@ -120,6 +138,7 @@ export default function MonthlyReportPage() {
   const [subCompany, setSubCompany] = useState("");
   const [status, setStatus] = useState("");
   const [workOrderSearch, setWorkOrderSearch] = useState("");
+  const [serviceRate, setServiceRate] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -190,6 +209,116 @@ export default function MonthlyReportPage() {
       { expected: 0, completed: 0, missing: 0, extra: 0, ok: 0, low: 0, missingSites: 0 }
     );
   }, [filteredRows]);
+
+  const invoiceSummary = useMemo(() => {
+    const rate = Number(serviceRate) || 0;
+    const grouped = new Map<
+      string,
+      {
+        state: string;
+        clientName: string;
+        subCompany: string;
+        properties: number;
+        expectedServices: number;
+        completedServices: number;
+        missingServices: number;
+        invoiceAmount: number;
+      }
+    >();
+
+    for (const row of filteredRows) {
+      const stateCode = stateFromAddress(row.address) || "Unknown";
+      const key = [stateCode, row.clientName || "-", row.subCompany || "-"].join("::");
+      const current =
+        grouped.get(key) ??
+        {
+          state: stateCode,
+          clientName: row.clientName || "-",
+          subCompany: row.subCompany || "-",
+          properties: 0,
+          expectedServices: 0,
+          completedServices: 0,
+          missingServices: 0,
+          invoiceAmount: 0,
+        };
+
+      current.properties += 1;
+      current.expectedServices += Number(row.expectedServices) || 0;
+      current.completedServices += Number(row.completedServices) || 0;
+      current.missingServices += Number(row.missingServices) || 0;
+      current.invoiceAmount = current.completedServices * rate;
+      grouped.set(key, current);
+    }
+
+    return Array.from(grouped.values()).sort(
+      (a, b) =>
+        a.state.localeCompare(b.state) ||
+        a.clientName.localeCompare(b.clientName) ||
+        a.subCompany.localeCompare(b.subCompany)
+    );
+  }, [filteredRows, serviceRate]);
+
+  function exportInvoiceSummary() {
+    downloadCsv(`${month || "monthly"}-invoice-summary-by-state.csv`, [
+      [
+        "month",
+        "state",
+        "clientName",
+        "subCompany",
+        "properties",
+        "expectedServices",
+        "completedServices",
+        "missingServices",
+        "ratePerService",
+        "invoiceAmount",
+      ],
+      ...invoiceSummary.map((row) => [
+        month,
+        row.state,
+        row.clientName,
+        row.subCompany,
+        row.properties,
+        row.expectedServices,
+        row.completedServices,
+        row.missingServices,
+        Number(serviceRate) || 0,
+        row.invoiceAmount.toFixed(2),
+      ]),
+    ]);
+  }
+
+  function exportInvoiceDetail() {
+    downloadCsv(`${month || "monthly"}-invoice-detail.csv`, [
+      [
+        "month",
+        "state",
+        "workOrderNumber",
+        "address",
+        "clientName",
+        "subCompany",
+        "expectedServices",
+        "completedServices",
+        "missingServices",
+        "lastUploadDate",
+        "status",
+        "siteId",
+      ],
+      ...filteredRows.map((row) => [
+        row.month,
+        stateFromAddress(row.address) || "Unknown",
+        row.workOrderNumber || "",
+        row.address,
+        row.clientName,
+        row.subCompany,
+        row.expectedServices,
+        row.completedServices,
+        row.missingServices,
+        row.lastUploadDate,
+        row.status,
+        row.siteId,
+      ]),
+    ]);
+  }
 
   const controlStyle: React.CSSProperties = {
     minWidth: 160,
@@ -349,6 +478,72 @@ export default function MonthlyReportPage() {
               </div>
               );
             })}
+          </section>
+
+          <section
+            style={{
+              marginBottom: 16,
+              padding: 12,
+              background: "#fff",
+              border: "1px solid #e5e7eb",
+              borderRadius: 8,
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+              <div>
+                <h2 style={{ fontSize: 18, margin: "0 0 4px" }}>Invoice Export By State</h2>
+                <div style={{ color: "#64748b", fontSize: 13 }}>
+                  Uses the current filters and totals completed services by state, client, and sub-company.
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                <input
+                  value={serviceRate}
+                  onChange={(e) => setServiceRate(e.target.value)}
+                  placeholder="Rate per service"
+                  inputMode="decimal"
+                  style={{ ...controlStyle, minWidth: 150, flex: "0 1 150px" }}
+                />
+                <button type="button" onClick={exportInvoiceSummary} style={controlStyle}>
+                  Export State Summary CSV
+                </button>
+                <button type="button" onClick={exportInvoiceDetail} style={controlStyle}>
+                  Export Detail CSV
+                </button>
+              </div>
+            </div>
+
+            <div style={{ overflowX: "auto", marginTop: 12 }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 760 }}>
+                <thead>
+                  <tr style={{ background: "#f8fafc" }}>
+                    {["State", "Client", "Sub-company", "Properties", "Expected", "Completed", "Missing", "Invoice"].map(
+                      (heading) => (
+                        <th key={heading} style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #e5e7eb" }}>
+                          {heading}
+                        </th>
+                      )
+                    )}
+                  </tr>
+                </thead>
+                <tbody>
+                  {invoiceSummary.map((row) => (
+                    <tr key={`${row.state}-${row.clientName}-${row.subCompany}`}>
+                      <td style={{ padding: 8, borderBottom: "1px solid #eef2f7", fontWeight: 800 }}>{row.state}</td>
+                      <td style={{ padding: 8, borderBottom: "1px solid #eef2f7" }}>{row.clientName}</td>
+                      <td style={{ padding: 8, borderBottom: "1px solid #eef2f7" }}>{row.subCompany}</td>
+                      <td style={{ padding: 8, borderBottom: "1px solid #eef2f7" }}>{row.properties}</td>
+                      <td style={{ padding: 8, borderBottom: "1px solid #eef2f7" }}>{row.expectedServices}</td>
+                      <td style={{ padding: 8, borderBottom: "1px solid #eef2f7" }}>{row.completedServices}</td>
+                      <td style={{ padding: 8, borderBottom: "1px solid #eef2f7" }}>{row.missingServices}</td>
+                      <td style={{ padding: 8, borderBottom: "1px solid #eef2f7" }}>
+                        ${row.invoiceAmount.toFixed(2)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </section>
 
           <div style={{ overflowX: "auto", border: "1px solid #e5e7eb", borderRadius: 8, background: "#fff" }}>
