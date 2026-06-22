@@ -140,7 +140,15 @@ function isSiteHeaderRow(siteId: string, address: string) {
   );
 }
 
-function localDateParts(value: string, timeZone: string) {
+function dateOnlyParts(value: string) {
+  const match = value.trim().match(/^(20\d{2})-([01]\d)-([0-3]\d)/);
+  if (!match) return null;
+  return { month: `${match[1]}-${match[2]}`, date: `${match[1]}-${match[2]}-${match[3]}` };
+}
+
+function localDateParts(value: string, timeZone: string, dateOnly = false) {
+  if (dateOnly) return dateOnlyParts(value);
+
   const normalizedValue = value.trim().replace(
     /^(20\d{2}-[01]\d-[0-3]\d)(\d{2}:\d{2})/,
     "$1T$2"
@@ -348,13 +356,25 @@ function parseUploads(rows: unknown[][], timeZone: string) {
   const timestampIdx = headerIndex(headers, ["timestamp", "timestampISO", "uploadedAt"], 0);
   const siteIdIdx = headerIndex(headers, ["siteId"], 2);
   const addressFolderIdIdx = headerIndex(headers, ["addressFolderId", "folderId", "driveFolderId"], 3);
+  const countIdx = headerIndex(headers, ["count", "fileCount", "driveFileId"], 5);
+  const linksIdx = headerIndex(headers, ["driveLinks", "driveLink"], 6);
+  const filenamesIdx = headerIndex(headers, ["originalFilenames", "originalFilename"], 7);
+  const notesIdx = headerIndex(headers, ["notes"], 9);
   const groups = new Set<string>();
   const lastUploadByMonthSite = new Map<string, string>();
   const months = new Set<string>();
 
   for (const r of body) {
     const siteIds = Array.from(new Set([cell(r, siteIdIdx), cell(r, addressFolderIdIdx)].filter(Boolean)));
-    const parts = localDateParts(cell(r, timestampIdx), timeZone);
+    const manualText = [cell(r, countIdx), cell(r, linksIdx), cell(r, filenamesIdx), cell(r, notesIdx)]
+      .join(" ")
+      .toLowerCase();
+    const hasPhotoEvidence =
+      /\d+\s*file/.test(cell(r, countIdx).toLowerCase()) ||
+      Boolean(cell(r, linksIdx)) ||
+      Boolean(cell(r, filenamesIdx));
+    const isManualUpload = !hasPhotoEvidence || manualText.includes("manual") || manualText.includes("no photo");
+    const parts = localDateParts(cell(r, timestampIdx), timeZone, isManualUpload);
     if (siteIds.length === 0 || !parts) continue;
 
     months.add(parts.month);
