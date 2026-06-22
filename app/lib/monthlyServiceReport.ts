@@ -343,12 +343,13 @@ function parseUploads(rows: unknown[][], timeZone: string) {
   const body = headers.length > 0 ? remainingRows : rows;
   const timestampIdx = headerIndex(headers, ["timestamp", "timestampISO", "uploadedAt"], 0);
   const siteIdIdx = headerIndex(headers, ["siteId"], 2);
+  const addressFolderIdIdx = headerIndex(headers, ["addressFolderId", "folderId", "driveFolderId"], 3);
   const groups = new Set<string>();
   const lastUploadByMonthSite = new Map<string, string>();
   const months = new Set<string>();
 
   for (const r of body) {
-    const siteId = cell(r, siteIdIdx);
+    const siteId = cell(r, siteIdIdx) || cell(r, addressFolderIdIdx);
     const parts = localDateParts(cell(r, timestampIdx), timeZone);
     if (!siteId || !parts) continue;
 
