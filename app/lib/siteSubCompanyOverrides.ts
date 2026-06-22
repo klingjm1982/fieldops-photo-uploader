@@ -45,6 +45,53 @@ export function firstHeaderIndex(headers: unknown[], groups: string[][], fallbac
   return fallback;
 }
 
+export function isValidWorkOrderValue(value: string) {
+  const normalized = value.trim().toLowerCase();
+  return Boolean(
+    normalized &&
+      !["#n/a", "#ref!", "#value!", "n/a", "na", "none", "-"].includes(normalized)
+  );
+}
+
+export function monthNameFromMonth(month: string) {
+  const monthNumber = Number(month.slice(5, 7));
+  const names = [
+    "",
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+  ];
+  return names[monthNumber] ?? "";
+}
+
+export function workOrderColumnIndex(headers: unknown[], month: string) {
+  const monthName = monthNameFromMonth(month);
+  if (!monthName) return -1;
+
+  const normalizedMonth = normalizeHeader(monthName);
+  const normalizedHeaders = headers.map(normalizeHeader);
+
+  return normalizedHeaders.findIndex(
+    (header) =>
+      header.includes(normalizedMonth) &&
+      (header.includes("workorders") || header.includes("wo"))
+  );
+}
+
+export function currentMonthValue() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+}
+
 export function quoteSheetTitle(title: string) {
   return `'${title.replace(/'/g, "''")}'`;
 }

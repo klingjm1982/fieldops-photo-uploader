@@ -2,10 +2,13 @@ import { NextResponse } from "next/server";
 import { google } from "googleapis";
 import { readServiceAccount } from "@/app/lib/googleServiceAccount";
 import {
+  currentMonthValue,
   firstHeaderIndex,
+  isValidWorkOrderValue,
   readSubCompanyOverrides,
   subCompanyForSite,
   quoteSheetTitle,
+  workOrderColumnIndex,
   workOrderSiteListTab,
 } from "@/app/lib/siteSubCompanyOverrides";
 
@@ -126,6 +129,7 @@ export async function GET() {
     const folderIdx = headerIndex(headers, ["folderId", "addressFolderId", "driveFolderId"], 1);
     const siteIdIdx = headerIndex(headers, ["siteId"], folderIdx);
     const activeIdx = headerIndex(headers, ["active", "isActive"], -1);
+    const currentWorkOrderIdx = workOrderColumnIndex(headers, currentMonthValue());
     const marketIdx = headerIndex(headers, ["market"], 3);
     const clientIdx = headerIndex(headers, ["clientName", "client"], -1);
     const subCompanyIdx = headerIndex(
@@ -137,6 +141,10 @@ export async function GET() {
 
     const sites: Site[] = body
       .filter((r) => Array.isArray(r) && r.length > 0)
+      .filter((r) => {
+        if (currentWorkOrderIdx < 0) return true;
+        return isValidWorkOrderValue(cell(r, currentWorkOrderIdx));
+      })
       .map((r, i) => {
         const address = cell(r, addressIdx);
         const folderId = cell(r, folderIdx);

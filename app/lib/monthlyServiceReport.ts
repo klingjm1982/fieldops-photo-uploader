@@ -2,9 +2,11 @@ import { google, sheets_v4 } from "googleapis";
 import { readServiceAccount } from "@/app/lib/googleServiceAccount";
 import {
   firstHeaderIndex,
+  isValidWorkOrderValue,
   quoteSheetTitle,
   readSubCompanyOverrides,
   subCompanyForSite,
+  workOrderColumnIndex,
   workOrderSiteListTab,
 } from "@/app/lib/siteSubCompanyOverrides";
 
@@ -31,6 +33,7 @@ type SiteRow = {
   clientName: string;
   subCompany: string;
   expectedServices: number;
+  workOrdersByMonth: Map<string, string>;
   active: boolean;
 };
 
@@ -96,6 +99,29 @@ function parseActive(value: string) {
 function parseNumber(value: string, fallback = 0) {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
+const MONTH_NAMES = [
+  "january",
+  "february",
+  "march",
+  "april",
+  "may",
+  "june",
+  "july",
+  "august",
+  "september",
+  "october",
+  "november",
+  "december",
+];
+
+function monthNumberFromWorkOrderHeader(header: unknown) {
+  const normalized = normalizeHeader(header);
+  if (!normalized.includes("workorders") && !normalized.includes("wo")) return "";
+
+  const monthIndex = MONTH_NAMES.findIndex((name) => normalized.includes(name));
+  return monthIndex >= 0 ? String(monthIndex + 1).padStart(2, "0") : "";
 }
 
 function isSiteHeaderRow(siteId: string, address: string) {
@@ -248,10 +274,21 @@ function parseSites(rows: unknown[][]): SiteRow[] {
     ["servicesPerMonth", "expectedServices", "expectedServicesPerMonth"],
     -1
   );
+  const workOrderIndexes = headers
+    .map((header, index) => ({ index, monthNumber: monthNumberFromWorkOrderHeader(header) }))
+    .filter((item) => item.monthNumber);
 
   return body
     .map((r) => {
       const siteId = cell(r, siteIdIdx) || cell(r, folderIdx);
+      const workOrdersByMonth = new Map<string, string>();
+      for (const item of workOrderIndexes) {
+        const workOrderNumber = cell(r, item.index);
+        if (isValidWorkOrderValue(workOrderNumber)) {
+          workOrdersByMonth.set(item.monthNumber, workOrderNumber);
+        }
+      }
+
       return {
         siteId,
         folderId: cell(r, folderIdx),
@@ -259,6 +296,7 @@ function parseSites(rows: unknown[][]): SiteRow[] {
         clientName: cell(r, clientIdx) || "Driven Brands",
         subCompany: cell(r, subCompanyIdx),
         expectedServices: parseNumber(cell(r, expectedIdx), 0),
+        workOrdersByMonth,
         active: parseActive(cell(r, activeIdx)),
       };
     })
@@ -391,7 +429,12 @@ export async function refreshMonthlyServiceReport(monthParam?: string) {
 
   const summary: MonthlyServiceRow[] = months
     .flatMap((month) =>
-      sites.map((site) => {
+      sites.flatMap((site) => {
+        const monthWorkOrderNumber = site.workOrdersByMonth.get(month.slice(5, 7)) ?? "";
+        if (workOrderColumnIndex(sitesResp.data.values?.[0] ?? [], month) >= 0 && !monthWorkOrderNumber) {
+          return [];
+        }
+
         const monthSiteKey = `${month}::${site.siteId}`;
         const completedServices = uploads.completedByMonthSite.get(monthSiteKey) ?? 0;
         const expectedServices =
@@ -405,7 +448,7 @@ export async function refreshMonthlyServiceReport(monthParam?: string) {
         return {
           month,
           siteId: site.siteId,
-          workOrderNumber: workOrders.get(monthSiteKey) ?? "",
+          workOrderNumber: workOrders.get(monthSiteKey) ?? monthWorkOrderNumber,
           address: site.address,
           clientName: site.clientName,
           subCompany: subCompanyForSite(
