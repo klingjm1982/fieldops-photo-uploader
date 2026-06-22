@@ -16,6 +16,8 @@ type MonthlyServiceRow = {
   expectedServices: number;
   completedServices: number;
   missingServices: number;
+  subPrice?: number;
+  invoiceAmount?: number;
   lastUploadDate: string;
   status: MonthlyStatus;
 };
@@ -127,6 +129,10 @@ function downloadCsv(filename: string, rows: unknown[][]) {
   URL.revokeObjectURL(url);
 }
 
+function money(value: number) {
+  return value.toFixed(2);
+}
+
 export default function MonthlyReportPage() {
   const [rows, setRows] = useState<MonthlyServiceRow[]>([]);
   const [months, setMonths] = useState<string[]>([]);
@@ -214,7 +220,7 @@ export default function MonthlyReportPage() {
   }, [filteredRows]);
 
   const invoiceSummary = useMemo(() => {
-    const rate = Number(serviceRate) || 0;
+    const fallbackRate = Number(serviceRate) || 0;
     const grouped = new Map<
       string,
       {
@@ -249,7 +255,9 @@ export default function MonthlyReportPage() {
       current.expectedServices += Number(row.expectedServices) || 0;
       current.completedServices += Number(row.completedServices) || 0;
       current.missingServices += Number(row.missingServices) || 0;
-      current.invoiceAmount = current.completedServices * rate;
+      current.invoiceAmount +=
+        (Number(row.completedServices) || 0) *
+        ((Number(row.subPrice) || 0) || fallbackRate);
       grouped.set(key, current);
     }
 
@@ -272,7 +280,7 @@ export default function MonthlyReportPage() {
         "expectedServices",
         "completedServices",
         "missingServices",
-        "ratePerService",
+        "rateSource",
         "invoiceAmount",
       ],
       ...invoiceSummary.map((row) => [
@@ -284,7 +292,7 @@ export default function MonthlyReportPage() {
         row.expectedServices,
         row.completedServices,
         row.missingServices,
-        Number(serviceRate) || 0,
+        serviceRate ? `fallback ${Number(serviceRate) || 0}` : "site Sub Price",
         row.invoiceAmount.toFixed(2),
       ]),
     ]);
@@ -302,6 +310,8 @@ export default function MonthlyReportPage() {
         "expectedServices",
         "completedServices",
         "missingServices",
+        "subPrice",
+        "invoiceAmount",
         "lastUploadDate",
         "status",
         "siteId",
@@ -316,6 +326,8 @@ export default function MonthlyReportPage() {
         row.expectedServices,
         row.completedServices,
         row.missingServices,
+        Number(row.subPrice) || 0,
+        money(Number(row.invoiceAmount) || ((Number(row.completedServices) || 0) * (Number(row.subPrice) || 0))),
         row.lastUploadDate,
         row.status,
         row.siteId,

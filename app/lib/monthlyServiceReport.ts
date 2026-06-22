@@ -22,6 +22,8 @@ export type MonthlyServiceRow = {
   expectedServices: number;
   completedServices: number;
   missingServices: number;
+  subPrice: number;
+  invoiceAmount: number;
   lastUploadDate: string;
   status: MonthlyStatus;
 };
@@ -33,6 +35,7 @@ type SiteRow = {
   clientName: string;
   subCompany: string;
   expectedServices: number;
+  subPrice: number;
   workOrdersByMonth: Map<string, string>;
   active: boolean;
 };
@@ -51,6 +54,8 @@ const SUMMARY_HEADERS = [
   "expectedServices",
   "completedServices",
   "missingServices",
+  "subPrice",
+  "invoiceAmount",
   "lastUploadDate",
   "status",
 ];
@@ -177,6 +182,8 @@ function rowToValues(row: MonthlyServiceRow) {
     row.expectedServices,
     row.completedServices,
     row.missingServices,
+    row.subPrice,
+    row.invoiceAmount,
     row.lastUploadDate,
     row.status,
   ];
@@ -228,11 +235,11 @@ async function replaceTab(
   await ensureSheet(sheets, spreadsheetId, title);
   await sheets.spreadsheets.values.clear({
     spreadsheetId,
-    range: `${title}!A:K`,
+    range: `${title}!A:M`,
   });
   await sheets.spreadsheets.values.update({
     spreadsheetId,
-    range: `${title}!A1:K${Math.max(rows.length, 1)}`,
+    range: `${title}!A1:M${Math.max(rows.length, 1)}`,
     valueInputOption: "USER_ENTERED",
     requestBody: { values: rows },
   });
@@ -274,6 +281,7 @@ function parseSites(rows: unknown[][]): SiteRow[] {
     ["servicesPerMonth", "expectedServices", "expectedServicesPerMonth"],
     -1
   );
+  const subPriceIdx = headerIndex(headers, ["subPrice", "Sub Price", "subServicePrice"], -1);
   const workOrderIndexes = headers
     .map((header, index) => ({ index, monthNumber: monthNumberFromWorkOrderHeader(header) }))
     .filter((item) => item.monthNumber);
@@ -296,6 +304,7 @@ function parseSites(rows: unknown[][]): SiteRow[] {
         clientName: cell(r, clientIdx) || "Driven Brands",
         subCompany: cell(r, subCompanyIdx),
         expectedServices: parseNumber(cell(r, expectedIdx), 0),
+        subPrice: parseNumber(cell(r, subPriceIdx), 0),
         workOrdersByMonth,
         active: parseActive(cell(r, activeIdx)),
       };
@@ -442,6 +451,8 @@ export async function refreshMonthlyServiceReport(monthParam?: string) {
           expectations.get(`${month}::*`) ??
           site.expectedServices;
         const missingServices = Math.max(expectedServices - completedServices, 0);
+        const subPrice = site.subPrice;
+        const invoiceAmount = completedServices * subPrice;
         const status: MonthlyStatus =
           completedServices >= expectedServices ? "OK" : completedServices > 0 ? "LOW" : "MISSING";
 
@@ -459,6 +470,8 @@ export async function refreshMonthlyServiceReport(monthParam?: string) {
           expectedServices,
           completedServices,
           missingServices,
+          subPrice,
+          invoiceAmount,
           lastUploadDate: uploads.lastUploadByMonthSite.get(monthSiteKey) ?? "",
           status,
         };
