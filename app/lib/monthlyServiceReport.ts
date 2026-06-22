@@ -1,5 +1,9 @@
 import { google, sheets_v4 } from "googleapis";
 import { readServiceAccount } from "@/app/lib/googleServiceAccount";
+import {
+  readSubCompanyOverrides,
+  subCompanyForSite,
+} from "@/app/lib/siteSubCompanyOverrides";
 
 export type MonthlyStatus = "OK" | "LOW" | "MISSING";
 
@@ -19,6 +23,7 @@ export type MonthlyServiceRow = {
 
 type SiteRow = {
   siteId: string;
+  folderId: string;
   address: string;
   clientName: string;
   subCompany: string;
@@ -234,6 +239,7 @@ function parseSites(rows: unknown[][]): SiteRow[] {
       const siteId = cell(r, siteIdIdx) || cell(r, folderIdx);
       return {
         siteId,
+        folderId: cell(r, folderIdx),
         address: cell(r, addressIdx),
         clientName: cell(r, clientIdx),
         subCompany: cell(r, subCompanyIdx),
@@ -369,6 +375,7 @@ export async function refreshMonthlyServiceReport(monthParam?: string) {
   }
 
   const sites = parseSites(sitesResp.data.values ?? []);
+  const subCompanyOverrides = await readSubCompanyOverrides(sheets, spreadsheetId);
   const expectations = parseMonthlyExpectations(expectationsResp.data.values ?? []);
   const uploads = parseUploads(uploadsResp.data.values ?? [], timeZone);
   const workOrders = parseWorkOrders(workOrdersResp.data.values ?? []);
@@ -395,7 +402,11 @@ export async function refreshMonthlyServiceReport(monthParam?: string) {
           workOrderNumber: workOrders.get(monthSiteKey) ?? "",
           address: site.address,
           clientName: site.clientName,
-          subCompany: site.subCompany,
+          subCompany: subCompanyForSite(
+            subCompanyOverrides,
+            { folderId: site.folderId, siteId: site.siteId, address: site.address },
+            site.subCompany
+          ),
           expectedServices,
           completedServices,
           missingServices,

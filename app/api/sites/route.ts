@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import { google } from "googleapis";
 import { readServiceAccount } from "@/app/lib/googleServiceAccount";
+import {
+  readSubCompanyOverrides,
+  subCompanyForSite,
+} from "@/app/lib/siteSubCompanyOverrides";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -92,6 +96,7 @@ export async function GET() {
       spreadsheetId: sheetId,
       range: `${tab}!A:Z`,
     });
+    const subCompanyOverrides = await readSubCompanyOverrides(sheets, sheetId);
 
     const rows = resp.data.values ?? [];
     const [maybeHeaders = [], ...remainingRows] = rows;
@@ -124,6 +129,8 @@ export async function GET() {
         const market = cell(r, marketIdx);
         const siteId = cell(r, siteIdIdx) || folderId || `site-${i + 1}`;
 
+        const baseSubCompany = cell(r, subCompanyIdx);
+
         return {
           siteId,
           displayName: address,
@@ -132,7 +139,11 @@ export async function GET() {
           active,
           market,
           clientName: cell(r, clientIdx),
-          subCompany: cell(r, subCompanyIdx),
+          subCompany: subCompanyForSite(
+            subCompanyOverrides,
+            { folderId, siteId, address },
+            baseSubCompany
+          ),
           servicesPerMonth: Number(cell(r, servicesIdx)) || 0,
         };
       })
