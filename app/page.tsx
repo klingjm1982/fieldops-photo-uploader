@@ -197,8 +197,10 @@ export default function Page() {
     await handleBatchUpload(files);
   }
 
+  const actionDisabled = !selected || uploading;
+
   return (
-    <main style={{ minHeight: "100vh", background: "#f6f8fb" }}>
+    <main style={{ minHeight: "100vh", background: "#f6f8fb", color: "#172033" }}>
       <div style={{ padding: 16, maxWidth: 720, margin: "0 auto" }}>
       <header
         style={{
@@ -234,7 +236,7 @@ export default function Page() {
 
       {!loading && !error && (
         <>
-          <label style={{ display: "block", fontWeight: 600, marginBottom: 6 }}>
+          <label style={{ display: "block", fontWeight: 800, marginBottom: 6, color: "#1f2937" }}>
             Site / Address
           </label>
 
@@ -249,7 +251,11 @@ export default function Page() {
               width: "100%",
               padding: 12,
               borderRadius: 10,
-              border: "1px solid #ddd",
+              border: "1px solid #9ca3af",
+              background: "#fff",
+              color: "#111827",
+              fontSize: 16,
+              fontWeight: 700,
             }}
           />
 
@@ -260,6 +266,8 @@ export default function Page() {
                 borderRadius: 10,
                 marginTop: 8,
                 overflow: "hidden",
+                background: "#fff",
+                boxShadow: "0 8px 18px rgba(15, 23, 42, 0.08)",
               }}
             >
               {filtered.map((s) => (
@@ -276,12 +284,13 @@ export default function Page() {
                     textAlign: "left",
                     padding: 12,
                     border: "none",
-                    borderBottom: "1px solid #f2f2f2",
+                    borderBottom: "1px solid #d1d5db",
                     background: "white",
+                    color: "#111827",
                     cursor: "pointer",
                   }}
                 >
-                  <div style={{ fontWeight: 600 }}>{s.displayName}</div>
+                  <div style={{ fontWeight: 800 }}>{s.displayName}</div>
                 </button>
               ))}
             </div>
@@ -291,23 +300,27 @@ export default function Page() {
             style={{
               marginTop: 16,
               padding: 12,
-              border: "1px solid #eee",
+              border: "1px solid #d1d5db",
               borderRadius: 10,
+              background: "#fff",
             }}
           >
-            <div style={{ fontWeight: 700, marginBottom: 10 }}>Upload Photos</div>
+            <div style={{ fontWeight: 800, marginBottom: 10, color: "#1f2937" }}>Upload Photos</div>
 
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
               <button
                 type="button"
-                disabled={!selected || uploading}
+                disabled={actionDisabled}
                 onClick={() => cameraInputRef.current?.click()}
                 style={{
                   padding: "10px 14px",
                   borderRadius: 10,
-                  border: "1px solid #ddd",
-                  background: !selected || uploading ? "#f3f3f3" : "white",
-                  cursor: !selected || uploading ? "not-allowed" : "pointer",
+                  border: `1px solid ${actionDisabled ? "#cbd5e1" : "#334155"}`,
+                  background: actionDisabled ? "#f8fafc" : "#172033",
+                  color: actionDisabled ? "#475569" : "#fff",
+                  cursor: actionDisabled ? "not-allowed" : "pointer",
+                  fontWeight: 800,
+                  opacity: 1,
                 }}
               >
                 📷 Camera
@@ -315,21 +328,24 @@ export default function Page() {
 
               <button
                 type="button"
-                disabled={!selected || uploading}
+                disabled={actionDisabled}
                 onClick={() => libraryInputRef.current?.click()}
                 style={{
                   padding: "10px 14px",
                   borderRadius: 10,
-                  border: "1px solid #ddd",
-                  background: !selected || uploading ? "#f3f3f3" : "white",
-                  cursor: !selected || uploading ? "not-allowed" : "pointer",
+                  border: `1px solid ${actionDisabled ? "#cbd5e1" : "#334155"}`,
+                  background: actionDisabled ? "#f8fafc" : "#172033",
+                  color: actionDisabled ? "#475569" : "#fff",
+                  cursor: actionDisabled ? "not-allowed" : "pointer",
+                  fontWeight: 800,
+                  opacity: 1,
                 }}
               >
                 🖼️ Photo Library (multi)
               </button>
             </div>
 
-            <p style={{ margin: "10px 0 0", color: "#666", fontSize: 13 }}>
+            <p style={{ margin: "10px 0 0", color: "#374151", fontSize: 13 }}>
               On Android, use Photo Library to select several saved photos at once. Camera usually
               captures one new photo at a time.
             </p>
