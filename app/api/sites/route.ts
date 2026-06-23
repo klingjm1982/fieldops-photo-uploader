@@ -7,6 +7,7 @@ import {
   isValidWorkOrderValue,
   readSubCompanyOverrides,
   subCompanyForSite,
+  normalizeAddress,
   quoteSheetTitle,
   workOrderColumnIndex,
   workOrderSiteListTab,
@@ -87,6 +88,22 @@ function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
+function mergeSites(primary: Site[], fallback: Site[]) {
+  const byAddress = new Set(primary.map((site) => normalizeAddress(site.displayName || site.address || "")));
+  const bySiteId = new Set(primary.map((site) => site.siteId).filter(Boolean));
+  const merged = [...primary];
+
+  for (const site of fallback) {
+    const addressKey = normalizeAddress(site.displayName || site.address || "");
+    if (bySiteId.has(site.siteId) || byAddress.has(addressKey)) continue;
+    merged.push(site);
+    bySiteId.add(site.siteId);
+    byAddress.add(addressKey);
+  }
+
+  return merged;
+}
+
 export async function GET() {
   try {
     const sheetId = process.env.GOOGLE_SHEET_ID;
@@ -102,6 +119,15 @@ export async function GET() {
       spreadsheetId: sheetId,
       range: `${quoteSheetTitle(tab)}!A:AZ`,
     });
+    let fallbackResp;
+    try {
+      fallbackResp = await sheets.spreadsheets.values.get({
+        spreadsheetId: sheetId,
+        range: "Sites!A:Z",
+      });
+    } catch {
+      fallbackResp = { data: { values: [] } };
+    }
     const subCompanyOverrides = await readSubCompanyOverrides(sheets, sheetId);
 
     const rows = resp.data.values ?? [];
@@ -139,7 +165,7 @@ export async function GET() {
     );
     const servicesIdx = headerIndex(headers, ["servicesPerMonth", "expectedServices"], -1);
 
-    const sites: Site[] = body
+    const primarySites: Site[] = body
       .filter((r) => Array.isArray(r) && r.length > 0)
       .filter((r) => {
         if (currentWorkOrderIdx < 0) return true;
@@ -173,6 +199,56 @@ export async function GET() {
       .filter((s) => s.displayName && s.folderId)
       .filter((s) => !isSiteHeaderRow(s.siteId, s.displayName))
       .filter((s) => s.active !== false);
+
+    const fallbackRows = fallbackResp.data.values ?? [];
+    const [fallbackMaybeHeaders = [], ...fallbackRemainingRows] = fallbackRows;
+    const fallbackHeaders = hasHeader(fallbackMaybeHeaders, ["address", "folderId", "active"])
+      ? fallbackMaybeHeaders
+      : [];
+    const fallbackBody = fallbackHeaders.length > 0 ? fallbackRemainingRows : fallbackRows;
+    const fallbackAddressIdx = firstHeaderIndex(
+      fallbackHeaders,
+      [["address", "displayName", "siteAddress"]],
+      0
+    );
+    const fallbackFolderIdx = headerIndex(
+      fallbackHeaders,
+      ["folderId", "addressFolderId", "driveFolderId", "siteId"],
+      1
+    );
+    const fallbackActiveIdx = headerIndex(fallbackHeaders, ["active", "isActive"], 2);
+    const fallbackMarketIdx = headerIndex(fallbackHeaders, ["market", "subCompany"], 3);
+    const fallbackServicesIdx = headerIndex(fallbackHeaders, ["servicesPerMonth", "expectedServices"], 4);
+    const fallbackClientIdx = headerIndex(fallbackHeaders, ["clientName", "client"], 5);
+
+    const fallbackSites: Site[] = fallbackBody
+      .filter((r) => Array.isArray(r) && r.length > 0)
+      .map((r, i) => {
+        const address = cell(r, fallbackAddressIdx);
+        const folderId = cell(r, fallbackFolderIdx);
+        const active = parseActive(cell(r, fallbackActiveIdx));
+        const market = cell(r, fallbackMarketIdx);
+        return {
+          siteId: folderId || `fallback-site-${i + 1}`,
+          displayName: address,
+          address,
+          folderId,
+          active,
+          market,
+          clientName: cell(r, fallbackClientIdx) || "Driven Brands",
+          subCompany: subCompanyForSite(
+            subCompanyOverrides,
+            { folderId, siteId: folderId, address },
+            market
+          ),
+          servicesPerMonth: Number(cell(r, fallbackServicesIdx)) || 0,
+        };
+      })
+      .filter((s) => s.displayName && s.folderId)
+      .filter((s) => !isSiteHeaderRow(s.siteId, s.displayName))
+      .filter((s) => s.active !== false);
+
+    const sites = mergeSites(primarySites, fallbackSites);
 
     return NextResponse.json(sites);
   } catch (e: unknown) {

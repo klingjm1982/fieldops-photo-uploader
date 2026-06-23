@@ -6,6 +6,7 @@ import {
   quoteSheetTitle,
   readSubCompanyOverrides,
   subCompanyForSite,
+  normalizeAddress,
   workOrderColumnIndex,
   workOrderSiteListTab,
 } from "@/app/lib/siteSubCompanyOverrides";
@@ -338,6 +339,54 @@ function parseSites(rows: unknown[][]): SiteRow[] {
     .filter((s) => !isSiteHeaderRow(s.siteId, s.address));
 }
 
+function parseLegacySites(rows: unknown[][]): SiteRow[] {
+  const [maybeHeaders = [], ...remainingRows] = rows;
+  const headers = hasHeader(maybeHeaders, ["address", "folderId", "active"]) ? maybeHeaders : [];
+  const body = headers.length > 0 ? remainingRows : rows;
+  const addressIdx = firstHeaderIndex(headers, [["address", "displayName", "siteAddress"]], 0);
+  const folderIdx = headerIndex(headers, ["folderId", "addressFolderId", "driveFolderId", "siteId"], 1);
+  const activeIdx = headerIndex(headers, ["active", "isActive"], 2);
+  const subCompanyIdx = headerIndex(headers, ["subCompany", "subcontractorCompany", "market"], 3);
+  const expectedIdx = headerIndex(headers, ["servicesPerMonth", "expectedServices"], 4);
+  const clientIdx = headerIndex(headers, ["clientName", "client"], 5);
+
+  return body
+    .map((row) => {
+      const address = cell(row, addressIdx);
+      const folderId = cell(row, folderIdx);
+      return {
+        siteId: folderId,
+        folderId,
+        address,
+        clientName: cell(row, clientIdx) || "Driven Brands",
+        subCompany: cell(row, subCompanyIdx),
+        subEmail: "",
+        expectedServices: parseNumber(cell(row, expectedIdx), 0),
+        subPrice: 0,
+        workOrdersByMonth: new Map<string, string>(),
+        active: parseActive(cell(row, activeIdx)),
+      };
+    })
+    .filter((s) => s.siteId && s.address && s.active)
+    .filter((s) => !isSiteHeaderRow(s.siteId, s.address));
+}
+
+function mergeSiteRows(primary: SiteRow[], fallback: SiteRow[]) {
+  const byAddress = new Set(primary.map((site) => normalizeAddress(site.address)));
+  const bySiteId = new Set(primary.map((site) => site.siteId).filter(Boolean));
+  const merged = [...primary];
+
+  for (const site of fallback) {
+    const addressKey = normalizeAddress(site.address);
+    if (bySiteId.has(site.siteId) || byAddress.has(addressKey)) continue;
+    merged.push(site);
+    bySiteId.add(site.siteId);
+    byAddress.add(addressKey);
+  }
+
+  return merged;
+}
+
 function parseMonthlyExpectations(rows: unknown[][]) {
   const [maybeHeaders = [], ...remainingRows] = rows;
   const headers = hasHeader(maybeHeaders, ["month", "expectedServices"]) ? maybeHeaders : [];
@@ -447,6 +496,15 @@ export async function refreshMonthlyServiceReport(monthParam?: string) {
     spreadsheetId,
     range: `${quoteSheetTitle(sitesTab)}!A:AZ`,
   });
+  let fallbackSitesResp;
+  try {
+    fallbackSitesResp = await sheets.spreadsheets.values.get({
+      spreadsheetId,
+      range: "Sites!A:Z",
+    });
+  } catch {
+    fallbackSitesResp = { data: { values: [] } };
+  }
 
   const uploadsResp = await sheets.spreadsheets.values.get({
     spreadsheetId,
@@ -467,7 +525,10 @@ export async function refreshMonthlyServiceReport(monthParam?: string) {
     workOrdersResp = { data: { values: [] } };
   }
 
-  const sites = parseSites(sitesResp.data.values ?? []);
+  const sites = mergeSiteRows(
+    parseSites(sitesResp.data.values ?? []),
+    parseLegacySites(fallbackSitesResp.data.values ?? [])
+  );
   const subCompanyOverrides = await readSubCompanyOverrides(sheets, spreadsheetId);
   const expectations = parseMonthlyExpectations(expectationsResp.data.values ?? []);
   const uploads = parseUploads(uploadsResp.data.values ?? [], timeZone);
@@ -480,11 +541,16 @@ export async function refreshMonthlyServiceReport(monthParam?: string) {
     .flatMap((month) =>
       sites.flatMap((site) => {
         const monthWorkOrderNumber = site.workOrdersByMonth.get(month.slice(5, 7)) ?? "";
-        if (workOrderColumnIndex(sitesResp.data.values?.[0] ?? [], month) >= 0 && !monthWorkOrderNumber) {
+        const monthSiteKey = `${month}::${site.siteId}`;
+        const mappedWorkOrderNumber = workOrders.get(monthSiteKey) ?? "";
+        if (
+          workOrderColumnIndex(sitesResp.data.values?.[0] ?? [], month) >= 0 &&
+          !monthWorkOrderNumber &&
+          !mappedWorkOrderNumber
+        ) {
           return [];
         }
 
-        const monthSiteKey = `${month}::${site.siteId}`;
         const completedServices = uploads.completedByMonthSite.get(monthSiteKey) ?? 0;
         const expectedServices =
           expectations.get(monthSiteKey) ??
@@ -499,7 +565,7 @@ export async function refreshMonthlyServiceReport(monthParam?: string) {
         return {
           month,
           siteId: site.siteId,
-          workOrderNumber: workOrders.get(monthSiteKey) ?? monthWorkOrderNumber,
+          workOrderNumber: mappedWorkOrderNumber || monthWorkOrderNumber,
           address: site.address,
           clientName: site.clientName,
           subCompany: subCompanyForSite(
