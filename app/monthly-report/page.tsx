@@ -28,6 +28,26 @@ type ReportResponse = {
   summary: MonthlyServiceRow[];
 };
 
+type ReminderProperty = {
+  address: string;
+  workOrderNumber: string;
+  month: string;
+  status: MonthlyStatus;
+  expectedServices: number;
+  completedServices: number;
+  missingServices: number;
+};
+
+type ReminderGroup = {
+  to: string;
+  subCompany: string;
+  month: string;
+  properties: ReminderProperty[];
+  totalExpectedServices: number;
+  totalCompletedServices: number;
+  totalMissingServices: number;
+};
+
 const US_STATE_CODES = new Set([
   "AL",
   "AK",
@@ -138,6 +158,48 @@ function rowKey(row: MonthlyServiceRow) {
   return [row.month, row.siteId, row.workOrderNumber || row.address].join("::");
 }
 
+function groupReminderRows(rows: MonthlyServiceRow[]) {
+  const groups = new Map<string, ReminderGroup>();
+
+  for (const row of rows) {
+    const to = String(row.subEmail || "").trim();
+    const address = String(row.address || "").trim();
+    if (!to || !address) continue;
+
+    const subCompany = row.subCompany || "Subcontractor";
+    const key = [to.toLowerCase(), subCompany.toLowerCase()].join("::");
+    const current =
+      groups.get(key) ??
+      {
+        to,
+        subCompany,
+        month: row.month,
+        properties: [],
+        totalExpectedServices: 0,
+        totalCompletedServices: 0,
+        totalMissingServices: 0,
+      };
+
+    current.properties.push({
+      address,
+      workOrderNumber: row.workOrderNumber || "",
+      month: row.month,
+      status: row.status,
+      expectedServices: Number(row.expectedServices) || 0,
+      completedServices: Number(row.completedServices) || 0,
+      missingServices: Number(row.missingServices) || 0,
+    });
+    current.totalExpectedServices += Number(row.expectedServices) || 0;
+    current.totalCompletedServices += Number(row.completedServices) || 0;
+    current.totalMissingServices += Number(row.missingServices) || 0;
+    groups.set(key, current);
+  }
+
+  return Array.from(groups.values()).sort(
+    (a, b) => a.subCompany.localeCompare(b.subCompany) || a.to.localeCompare(b.to)
+  );
+}
+
 export default function MonthlyReportPage() {
   const [rows, setRows] = useState<MonthlyServiceRow[]>([]);
   const [months, setMonths] = useState<string[]>([]);
@@ -154,6 +216,7 @@ export default function MonthlyReportPage() {
   const [savingExpectedServices, setSavingExpectedServices] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [selectedReminderKeys, setSelectedReminderKeys] = useState<string[]>([]);
+  const [selectedReminderSubCompanies, setSelectedReminderSubCompanies] = useState<string[]>([]);
   const [sendingReminders, setSendingReminders] = useState(false);
   const [reminderPreview, setReminderPreview] = useState("");
 
@@ -213,8 +276,29 @@ export default function MonthlyReportPage() {
 
   const selectedReminderRows = useMemo(() => {
     const selected = new Set(selectedReminderKeys);
-    return filteredRows.filter((row) => selected.has(rowKey(row)));
-  }, [filteredRows, selectedReminderKeys]);
+    const selectedSubs = new Set(selectedReminderSubCompanies);
+    return filteredRows.filter(
+      (row) =>
+        selected.has(rowKey(row)) &&
+        (selectedSubs.size === 0 || selectedSubs.has(row.subCompany))
+    );
+  }, [filteredRows, selectedReminderKeys, selectedReminderSubCompanies]);
+
+  const reminderSubCompanies = useMemo(
+    () => unique(filteredRows.map((row) => row.subCompany)),
+    [filteredRows]
+  );
+
+  const reminderSelectableRows = useMemo(() => {
+    if (selectedReminderSubCompanies.length === 0) return filteredRows;
+    const selectedSubs = new Set(selectedReminderSubCompanies);
+    return filteredRows.filter((row) => selectedSubs.has(row.subCompany));
+  }, [filteredRows, selectedReminderSubCompanies]);
+
+  const selectedReminderGroups = useMemo(
+    () => groupReminderRows(selectedReminderRows),
+    [selectedReminderRows]
+  );
 
   const totals = useMemo(() => {
     return filteredRows.reduce(
@@ -351,28 +435,19 @@ export default function MonthlyReportPage() {
   }
 
   function reminderPayload(rowsToSend = selectedReminderRows) {
+    const reminderGroups = groupReminderRows(rowsToSend);
     return {
       month,
       generatedAt: new Date().toISOString(),
       uploadLink: "https://fieldops-photo-uploader.vercel.app/",
-      reminders: rowsToSend.map((row) => ({
-        to: row.subEmail || "",
-        subCompany: row.subCompany,
-        address: row.address,
-        workOrderNumber: row.workOrderNumber || "",
-        month: row.month,
-        status: row.status,
-        expectedServices: row.expectedServices,
-        completedServices: row.completedServices,
-        missingServices: row.missingServices,
-      })),
+      reminderGroups,
     };
   }
 
   function previewReminderBatch(rowsToPreview = selectedReminderRows) {
     const payload = reminderPayload(rowsToPreview);
     setReminderPreview(JSON.stringify(payload, null, 2));
-    setMessage(`Prepared ${payload.reminders.length} reminder(s) for review.`);
+    setMessage(`Prepared ${payload.reminderGroups.length} subcontractor summary email(s) for review.`);
   }
 
   async function copyReminderPayload() {
@@ -583,22 +658,22 @@ export default function MonthlyReportPage() {
               <div>
                 <h2 style={{ fontSize: 18, margin: "0 0 4px" }}>Photo Reminder Emails</h2>
                 <div style={{ color: "#64748b", fontSize: 13 }}>
-                  Select rows below, preview the reminder batch, then send through the FIELD OPS Gmail Apps Script.
+                  Select subs and rows below, then send one summary email per subcontractor through the FIELD OPS Gmail Apps Script.
                 </div>
               </div>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                 <button
                   type="button"
-                  onClick={() => setSelectedReminderKeys(filteredRows.map(rowKey))}
+                  onClick={() => setSelectedReminderKeys(reminderSelectableRows.map(rowKey))}
                   style={controlStyle}
                 >
-                  Select all filtered
+                  Select filtered subs
                 </button>
                 <button
                   type="button"
                   onClick={() =>
                     setSelectedReminderKeys(
-                      filteredRows
+                      reminderSelectableRows
                         .filter((row) => (row.status === "LOW" || row.status === "MISSING") && row.subEmail)
                         .map(rowKey)
                     )
@@ -612,8 +687,84 @@ export default function MonthlyReportPage() {
                 </button>
               </div>
             </div>
+            <div
+              style={{
+                marginTop: 12,
+                padding: 10,
+                border: "1px solid #e5e7eb",
+                borderRadius: 8,
+                background: "#f8fafc",
+              }}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                <div>
+                  <div style={{ fontWeight: 800 }}>Send only to selected subs</div>
+                  <div style={{ color: "#64748b", fontSize: 13 }}>
+                    Leave blank to use all subs in the current report filters.
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedReminderSubCompanies(reminderSubCompanies)}
+                    style={{ ...controlStyle, flex: "0 1 140px", minWidth: 120 }}
+                  >
+                    All subs
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedReminderSubCompanies([])}
+                    style={{ ...controlStyle, flex: "0 1 140px", minWidth: 120 }}
+                  >
+                    Clear subs
+                  </button>
+                </div>
+              </div>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+                  gap: 8,
+                  maxHeight: 140,
+                  overflowY: "auto",
+                  marginTop: 10,
+                  paddingRight: 4,
+                }}
+              >
+                {reminderSubCompanies.map((name) => (
+                  <label
+                    key={name}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      padding: "6px 8px",
+                      border: "1px solid #e2e8f0",
+                      borderRadius: 8,
+                      background: "#fff",
+                      fontSize: 13,
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedReminderSubCompanies.includes(name)}
+                      onChange={() =>
+                        setSelectedReminderSubCompanies((current) =>
+                          current.includes(name)
+                            ? current.filter((item) => item !== name)
+                            : [...current, name]
+                        )
+                      }
+                    />
+                    <span>{name}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
             <div style={{ marginTop: 10, color: "#475569", fontSize: 13 }}>
-              {selectedReminderRows.length} selected, {selectedReminderRows.filter((row) => row.subEmail).length} with email.
+              {selectedReminderRows.length} selected location(s),{" "}
+              {selectedReminderRows.filter((row) => row.subEmail).length} with email,{" "}
+              {selectedReminderGroups.length} summary email(s).
             </div>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
               <button type="button" onClick={() => previewReminderBatch()} style={controlStyle}>

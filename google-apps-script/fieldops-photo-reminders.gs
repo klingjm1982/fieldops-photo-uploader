@@ -18,26 +18,33 @@ function doPost(e) {
     }
 
     const reminders = Array.isArray(payload.reminders) ? payload.reminders : [];
+    const reminderGroups = Array.isArray(payload.reminderGroups)
+      ? payload.reminderGroups
+      : groupRemindersByRecipient_(reminders);
     const sent = [];
     const skipped = [];
 
-    reminders.forEach((reminder) => {
-      const to = String(reminder.to || "").trim();
-      const address = String(reminder.address || "").trim();
-      if (!to || !address) {
-        skipped.push({ to: to, address: address, reason: "Missing email or address." });
+    reminderGroups.forEach((group) => {
+      const to = String(group.to || "").trim();
+      const properties = Array.isArray(group.properties) ? group.properties : [];
+      const cleanProperties = properties.filter((property) => String(property.address || "").trim());
+      if (!to || cleanProperties.length === 0) {
+        skipped.push({ to: to, subCompany: group.subCompany || "", reason: "Missing email or addresses." });
         return;
       }
 
-      const workOrder = String(reminder.workOrderNumber || "").trim();
-      const subject = `FIELD OPS photo reminder${workOrder ? ` - WO# ${workOrder}` : ""}`;
-      const body = buildReminderBody_(reminder);
+      const subject = `FIELD OPS photo reminder - ${cleanProperties.length} location(s)`;
+      const body = buildReminderBody_(Object.assign({}, group, { properties: cleanProperties }));
 
       GmailApp.sendEmail(to, subject, body, {
         name: "FIELD OPS",
       });
 
-      sent.push({ to: to, address: address, workOrderNumber: workOrder });
+      sent.push({
+        to: to,
+        subCompany: String(group.subCompany || "").trim(),
+        locations: cleanProperties.length,
+      });
     });
 
     return json_({ ok: true, sent: sent.length, skipped: skipped.length, sentRows: sent, skippedRows: skipped });
@@ -46,24 +53,33 @@ function doPost(e) {
   }
 }
 
-function buildReminderBody_(reminder) {
-  const workOrder = String(reminder.workOrderNumber || "").trim();
-  const address = String(reminder.address || "").trim();
-  const expected = Number(reminder.expectedServices || 0);
-  const completed = Number(reminder.completedServices || 0);
-  const missing = Number(reminder.missingServices || 0);
+function buildReminderBody_(group) {
+  const properties = Array.isArray(group.properties) ? group.properties : [];
   const uploadLink = FIELDOPS_UPLOAD_LINK;
+  const propertyLines = [];
+
+  properties.forEach((property, index) => {
+    const workOrder = String(property.workOrderNumber || "").trim();
+    const address = String(property.address || "").trim();
+    const expected = Number(property.expectedServices || 0);
+    const completed = Number(property.completedServices || 0);
+    const missing = Number(property.missingServices || 0);
+    const status = String(property.status || "").trim();
+
+    propertyLines.push(`${index + 1}. ${workOrder ? `WO# ${workOrder} - ` : ""}${address}`);
+    if (status) propertyLines.push(`   Status: ${status}`);
+    if (expected) propertyLines.push(`   Expected services this month: ${expected}`);
+    propertyLines.push(`   Completed photo submissions: ${completed}`);
+    if (missing) propertyLines.push(`   Missing services/photos: ${missing}`);
+    propertyLines.push("");
+  });
 
   return [
     "Good Morning,",
     "",
-    "Our records show photos have not been fully submitted for the service below.",
+    "Our records show photos have not been fully submitted for the locations below.",
     "",
-    workOrder ? `Work Order: ${workOrder}` : "",
-    `Address: ${address}`,
-    expected ? `Expected services this month: ${expected}` : "",
-    `Completed photo submissions: ${completed}`,
-    missing ? `Missing services/photos: ${missing}` : "",
+    propertyLines.join("\n").trim(),
     "",
     "As a reminder, the link below is the only way photos are to be submitted (no photos = no payment, this is Take 5's rule not ours). All photos are expected within 48 hours of service.",
     "",
@@ -72,6 +88,30 @@ function buildReminderBody_(reminder) {
     "Thank you.",
     "FIELD OPS",
   ].filter((line) => line !== "").join("\n");
+}
+
+function groupRemindersByRecipient_(reminders) {
+  const grouped = {};
+
+  reminders.forEach((reminder) => {
+    const to = String(reminder.to || "").trim();
+    const subCompany = String(reminder.subCompany || "Subcontractor").trim();
+    const address = String(reminder.address || "").trim();
+    if (!to || !address) return;
+
+    const key = `${to.toLowerCase()}::${subCompany.toLowerCase()}`;
+    if (!grouped[key]) {
+      grouped[key] = {
+        to: to,
+        subCompany: subCompany,
+        month: String(reminder.month || "").trim(),
+        properties: [],
+      };
+    }
+    grouped[key].properties.push(reminder);
+  });
+
+  return Object.keys(grouped).map((key) => grouped[key]);
 }
 
 function json_(data, statusCode) {
