@@ -1,5 +1,5 @@
 import { execFile, spawn } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
@@ -15,6 +15,14 @@ function argValue(name) {
   const prefix = `--${name}=`;
   const match = process.argv.find((arg) => arg.startsWith(prefix));
   return match ? match.slice(prefix.length).trim() : "";
+}
+
+function safePathPart(value) {
+  return String(value ?? "")
+    .trim()
+    .replace(/[^\w.-]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 80);
 }
 
 async function ask(message) {
@@ -83,6 +91,19 @@ function savePosition(filePath, position) {
   writeFileSync(filePath, JSON.stringify({ ...position, savedAt: new Date().toISOString() }, null, 2));
 }
 
+function preparedPhotoCount(workOrder, serviceDate) {
+  const preparedDir = path.join(
+    process.cwd(),
+    "corrigo-test-downloads",
+    `${safePathPart(serviceDate)}_${safePathPart(workOrder)}`
+  );
+  if (!existsSync(preparedDir)) return 0;
+  return readdirSync(preparedDir)
+    .filter((name) => name.includes(serviceDate))
+    .filter((name) => /\.(jpe?g|png|heic|webp)$/i.test(name))
+    .length;
+}
+
 async function capturePosition(label, saveFn) {
   await ask(`Press Enter, then move your mouse over ${label}. I will capture it in 5 seconds.`);
   for (const seconds of [5, 4, 3, 2, 1]) {
@@ -132,11 +153,11 @@ async function apiGet(month) {
   return json;
 }
 
-async function updateStatus(queueId, status) {
+async function updateStatus(queueId, status, lastError = "") {
   const res = await fetch(localApi, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action: "updateQueueStatus", queueId, status }),
+    body: JSON.stringify({ action: "updateQueueStatus", queueId, status, lastError }),
   });
   const json = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(json.message ?? `Status update failed with ${res.status}`);
@@ -259,6 +280,26 @@ async function main() {
     console.log(`- WO ${row.workOrderNumber}, ${row.serviceDate}: ${row.photoCount} photo(s), ${row.address}`);
   }
 
+  const rowsWithPhotos = [];
+  for (const row of rows) {
+    const photoCount = Number(row.photoCount) || 0;
+    if (photoCount > 0) {
+      rowsWithPhotos.push(row);
+      continue;
+    }
+
+    const message = `Skipped: queue row has 0 photos/download links for ${row.serviceDate}.`;
+    console.log(`\n${message}`);
+    await updateStatus(row.queueId, "No Photos Found", message);
+    console.log(`Marked WO ${row.workOrderNumber}, ${row.serviceDate} as No Photos Found.`);
+  }
+
+  rows = rowsWithPhotos;
+  if (rows.length === 0) {
+    console.log("No queue rows with photos are ready to upload.");
+    return;
+  }
+
   const browser = manualCorrigo || osSearch ? null : await openCorrigo(corrigoUrl);
   const searchPosition = osSearch
     ? instant
@@ -285,6 +326,25 @@ async function main() {
     for (const [index, row] of rows.entries()) {
       console.log(`\nNext row: WO ${row.workOrderNumber}, ${row.serviceDate} (${row.photoCount} photo(s))`);
 
+      console.log(`Preparing ${row.serviceDate}...`);
+      await runInherited("npm", [
+        "run",
+        "corrigo:test-prepare",
+        "--",
+        `--month=${month}`,
+        `--work-order=${row.workOrderNumber}`,
+        `--service-date=${row.serviceDate}`,
+      ]);
+
+      const preparedCount = preparedPhotoCount(row.workOrderNumber, row.serviceDate);
+      if (preparedCount === 0) {
+        const message = `Skipped: no downloadable photo files were prepared for ${row.serviceDate}.`;
+        console.log(message);
+        await updateStatus(row.queueId, "Photo Download Failed", message);
+        console.log(`Marked WO ${row.workOrderNumber}, ${row.serviceDate} as Photo Download Failed.`);
+        continue;
+      }
+
       if (manualCorrigo) {
         if (row.workOrderNumber !== lastWorkOrder) {
           await ask(`Search/open Corrigo work order ${row.workOrderNumber}, then press Enter here.`);
@@ -299,18 +359,8 @@ async function main() {
       }
       lastWorkOrder = row.workOrderNumber;
 
-      console.log(`Preparing ${row.serviceDate}...`);
-      await runInherited("npm", [
-        "run",
-        "corrigo:test-prepare",
-        "--",
-        `--month=${month}`,
-        `--work-order=${row.workOrderNumber}`,
-        `--service-date=${row.serviceDate}`,
-      ]);
-
       const photoCount = Number(row.photoCount) || 0;
-      const uploadLimit = maxPhotosPerDrag > 0 ? maxPhotosPerDrag : photoCount;
+      const uploadLimit = maxPhotosPerDrag > 0 ? maxPhotosPerDrag : Math.max(photoCount, preparedCount);
       if (photoCount > uploadLimit) {
         console.log(`Corrigo limit: uploading the first ${uploadLimit} of ${photoCount} photo(s) for this service.`);
       }
