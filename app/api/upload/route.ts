@@ -22,16 +22,78 @@ async function sendUploadEmail(params: { to: string; from: string; subject: stri
 }
 
 // ---------- ISO week helpers ----------
-function getISOWeek(date: Date) {
-  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+type LocalTimeParts = {
+  year: string;
+  month: string;
+  day: string;
+  hour: string;
+  minute: string;
+  second: string;
+  offset: string;
+  date: string;
+  iso: string;
+  fileStamp: string;
+};
+
+function timeZoneOffset(date: Date, timeZone: string, parts: Omit<LocalTimeParts, "offset" | "date" | "iso" | "fileStamp">) {
+  const localAsUtc = Date.UTC(
+    Number(parts.year),
+    Number(parts.month) - 1,
+    Number(parts.day),
+    Number(parts.hour),
+    Number(parts.minute),
+    Number(parts.second)
+  );
+  const offsetMinutes = Math.round((localAsUtc - date.getTime()) / 60000);
+  const sign = offsetMinutes >= 0 ? "+" : "-";
+  const absolute = Math.abs(offsetMinutes);
+  return `${sign}${String(Math.floor(absolute / 60)).padStart(2, "0")}:${String(absolute % 60).padStart(2, "0")}`;
+}
+
+function localTimeParts(date: Date, timeZone: string): LocalTimeParts {
+  const formatted = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(date);
+  const value = (type: Intl.DateTimeFormatPartTypes) =>
+    formatted.find((part) => part.type === type)?.value ?? "00";
+  const parts = {
+    year: value("year"),
+    month: value("month"),
+    day: value("day"),
+    hour: value("hour"),
+    minute: value("minute"),
+    second: value("second"),
+  };
+  const offset = timeZoneOffset(date, timeZone, parts);
+  const localDate = `${parts.year}-${parts.month}-${parts.day}`;
+  const localTime = `${parts.hour}:${parts.minute}:${parts.second}`;
+
+  return {
+    ...parts,
+    offset,
+    date: localDate,
+    iso: `${localDate}T${localTime}${offset}`,
+    fileStamp: `${localDate}T${parts.hour}-${parts.minute}-${parts.second}${offset.replace(":", "")}`,
+  };
+}
+
+function getISOWeekFromLocalDate(parts: Pick<LocalTimeParts, "year" | "month" | "day">) {
+  const d = new Date(Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day)));
   const dayNum = d.getUTCDay() || 7;
   d.setUTCDate(d.getUTCDate() + 4 - dayNum);
   const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
   const weekNo = Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
   return { year: d.getUTCFullYear(), week: weekNo };
 }
-function weekFolderName(date: Date) {
-  const { year, week } = getISOWeek(date);
+function weekFolderName(parts: Pick<LocalTimeParts, "year" | "month" | "day">) {
+  const { year, week } = getISOWeekFromLocalDate(parts);
   return `${year}-W${String(week).padStart(2, "0")}`;
 }
 
@@ -167,8 +229,10 @@ export async function POST(req: Request) {
 
     const drive = await getDriveClient();
 
+    const timeZone = process.env.SERVICE_TIME_ZONE || "America/Chicago";
     const now = new Date();
-    const weekName = weekFolderName(now);
+    const localNow = localTimeParts(now, timeZone);
+    const weekName = weekFolderName(localNow);
 
     // One weekly folder operation per batch
     const weekFolderId = await findOrCreateWeeklySubfolder(drive, folderId, weekName);
@@ -186,7 +250,7 @@ export async function POST(req: Request) {
 
       const original = f.name || "upload.jpg";
       const safeName = original.replace(/[^\w.\-]+/g, "_");
-      const finalName = `${now.toISOString().replace(/[:.]/g, "-")}_${safeName}`;
+      const finalName = `${localNow.fileStamp}_${safeName}`;
 
       const created = await drive.files.create({
         requestBody: {
@@ -216,7 +280,7 @@ export async function POST(req: Request) {
 
     try {
       await appendUploadLogRow({
-        timestampISO: now.toISOString(),
+        timestampISO: localNow.iso,
         address: displayName,
         siteId,
         addressFolderId: folderId,
@@ -231,7 +295,7 @@ export async function POST(req: Request) {
       sheetLogged = true;
 
       try {
-        const month = now.toISOString().slice(0, 7);
+        const month = localNow.date.slice(0, 7);
         const result = await buildCorrigoQueue(month);
         corrigoQueueCreated = result.created;
       } catch (err: any) {
@@ -268,7 +332,7 @@ export async function POST(req: Request) {
           (uploadedBy ? `Uploaded By: ${uploadedBy}\n` : "") +
           (notes ? `Notes: ${notes}\n` : "") +
           `\nFile Links (up to 20):\n${linkList}\n` +
-          `\nTimestamp: ${now.toISOString()}\n`,
+          `\nTimestamp: ${localNow.iso}\n`,
       });
 
       emailSent = true;
