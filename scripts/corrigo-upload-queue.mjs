@@ -50,6 +50,15 @@ async function run(command, args) {
   return result.stdout.trim();
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isQuotaError(error) {
+  const message = error?.message ?? String(error);
+  return /quota exceeded|rate limit|read requests per minute|429/i.test(message);
+}
+
 async function mousePosition() {
   const stdout = await run("cliclick", ["p:."]);
   const match = stdout.match(/(\d+),(\d+)/);
@@ -147,10 +156,22 @@ async function osSearchCorrigoWorkOrder(workOrder, searchPosition) {
 
 async function apiGet(month) {
   const url = `${localApi}?month=${encodeURIComponent(month)}`;
-  const res = await fetch(url, { cache: "no-store" });
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(json.message ?? `GET ${url} failed with ${res.status}`);
-  return json;
+  const delays = [3000, 7000, 15000, 30000];
+
+  for (let attempt = 0; attempt <= delays.length; attempt += 1) {
+    const res = await fetch(url, { cache: "no-store" });
+    const json = await res.json().catch(() => ({}));
+    if (res.ok) return json;
+
+    const error = new Error(json.message ?? `GET ${url} failed with ${res.status}`);
+    if (!isQuotaError(error) || attempt === delays.length) throw error;
+
+    const delay = delays[attempt];
+    console.log(`Google Sheets quota hit while loading queue. Waiting ${Math.round(delay / 1000)}s, then retrying.`);
+    await sleep(delay);
+  }
+
+  throw new Error(`GET ${url} failed.`);
 }
 
 async function updateStatus(queueId, status, lastError = "") {

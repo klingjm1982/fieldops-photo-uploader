@@ -83,6 +83,35 @@ const QUEUE_HEADERS = [
   "updatedAt",
 ];
 
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isSheetsQuotaError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return /quota exceeded|rate limit|read requests per minute|429/i.test(message);
+}
+
+async function withSheetsRetry<T>(label: string, operation: () => Promise<T>) {
+  const delays = [1000, 2500, 5000, 10000];
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt <= delays.length; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      if (!isSheetsQuotaError(error) || attempt === delays.length) break;
+
+      const delay = delays[attempt];
+      console.warn(`${label} hit Google Sheets quota. Retrying in ${Math.round(delay / 1000)}s.`);
+      await sleep(delay);
+    }
+  }
+
+  throw lastError;
+}
+
 async function getSheetsClient() {
   const { clientEmail, privateKey } = readServiceAccount();
   const auth = new google.auth.JWT({
@@ -247,25 +276,31 @@ function serviceDateFromFilenames(filenames: string[], fallbackDate: string) {
 
 async function ensureSheet(sheets: sheets_v4.Sheets, title: string, headers: string[]) {
   const id = spreadsheetId();
-  const meta = await sheets.spreadsheets.get({
-    spreadsheetId: id,
-    fields: "sheets.properties.title",
-  });
+  const meta = await withSheetsRetry(`Read spreadsheet metadata for ${title}`, () =>
+    sheets.spreadsheets.get({
+      spreadsheetId: id,
+      fields: "sheets.properties.title",
+    })
+  );
   const exists = meta.data.sheets?.some((s) => s.properties?.title === title);
 
   if (!exists) {
-    await sheets.spreadsheets.batchUpdate({
-      spreadsheetId: id,
-      requestBody: {
-        requests: [{ addSheet: { properties: { title } } }],
-      },
-    });
+    await withSheetsRetry(`Create sheet ${title}`, () =>
+      sheets.spreadsheets.batchUpdate({
+        spreadsheetId: id,
+        requestBody: {
+          requests: [{ addSheet: { properties: { title } } }],
+        },
+      })
+    );
   }
 
-  const current = await sheets.spreadsheets.values.get({
-    spreadsheetId: id,
-    range: `${title}!A1:Z1`,
-  });
+  const current = await withSheetsRetry(`Read headers for ${title}`, () =>
+    sheets.spreadsheets.values.get({
+      spreadsheetId: id,
+      range: `${title}!A1:Z1`,
+    })
+  );
 
   if ((current.data.values ?? []).length === 0) {
     await sheets.spreadsheets.values.update({
@@ -278,18 +313,22 @@ async function ensureSheet(sheets: sheets_v4.Sheets, title: string, headers: str
 }
 
 async function readValues(sheets: sheets_v4.Sheets, tab: string) {
-  const resp = await sheets.spreadsheets.values.get({
-    spreadsheetId: spreadsheetId(),
-    range: `${tab}!A:Z`,
-  });
+  const resp = await withSheetsRetry(`Read ${tab}`, () =>
+    sheets.spreadsheets.values.get({
+      spreadsheetId: spreadsheetId(),
+      range: `${tab}!A:Z`,
+    })
+  );
   return resp.data.values ?? [];
 }
 
 async function sheetIdForTitle(sheets: sheets_v4.Sheets, title: string) {
-  const meta = await sheets.spreadsheets.get({
-    spreadsheetId: spreadsheetId(),
-    fields: "sheets.properties(sheetId,title)",
-  });
+  const meta = await withSheetsRetry(`Read sheet id for ${title}`, () =>
+    sheets.spreadsheets.get({
+      spreadsheetId: spreadsheetId(),
+      fields: "sheets.properties(sheetId,title)",
+    })
+  );
   const sheet = meta.data.sheets?.find((s) => s.properties?.title === title);
   return sheet?.properties?.sheetId ?? null;
 }
