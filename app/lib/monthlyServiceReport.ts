@@ -3,8 +3,8 @@ import { readServiceAccount } from "@/app/lib/googleServiceAccount";
 import {
   firstHeaderIndex,
   isValidWorkOrderValue,
+  parseSubCompanyOverrides,
   quoteSheetTitle,
-  readSubCompanyOverrides,
   subCompanyForSite,
   normalizeAddress,
   workOrderColumnIndex,
@@ -43,9 +43,23 @@ type SiteRow = {
   active: boolean;
 };
 
+type MonthlyReportResult = {
+  month: string;
+  months: string[];
+  summary: MonthlyServiceRow[];
+  missed: MonthlyServiceRow[];
+};
+
+type RefreshMonthlyReportOptions = {
+  force?: boolean;
+  writeSheets?: boolean;
+};
+
 const SUMMARY_TAB = "MonthlyServiceSummary";
 const MISSED_TAB = "MissedServices";
 const EXPECTATIONS_TAB = "MonthlyServiceExpectations";
+const REPORT_CACHE_TTL_MS = 60_000;
+const reportCache = new Map<string, { expiresAt: number; report: MonthlyReportResult }>();
 const EXPECTATIONS_HEADERS = ["month", "siteId", "expectedServices", "notes"];
 const SUMMARY_HEADERS = [
   "month",
@@ -482,7 +496,10 @@ function parseWorkOrders(rows: unknown[][]) {
   return workOrders;
 }
 
-export async function refreshMonthlyServiceReport(monthParam?: string) {
+export async function refreshMonthlyServiceReport(
+  monthParam?: string,
+  options: RefreshMonthlyReportOptions = {}
+) {
   const spreadsheetId = process.env.GOOGLE_SHEET_ID;
   const sitesTab = workOrderSiteListTab();
   const uploadsTab = process.env.GOOGLE_UPLOADS_TAB || "UploadsLog";
@@ -491,53 +508,54 @@ export async function refreshMonthlyServiceReport(monthParam?: string) {
 
   if (!spreadsheetId) throw new Error("Missing GOOGLE_SHEET_ID");
 
-  const sheets = await getSheetsClient();
-  const sitesResp = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range: `${quoteSheetTitle(sitesTab)}!A:AZ`,
-  });
-  let fallbackSitesResp;
-  try {
-    fallbackSitesResp = await sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: "Sites!A:Z",
-    });
-  } catch {
-    fallbackSitesResp = { data: { values: [] } };
+  const cacheKey = monthParam || "__current__";
+  const cached = reportCache.get(cacheKey);
+  if (!options.force && !options.writeSheets && cached && cached.expiresAt > Date.now()) {
+    return cached.report;
   }
 
-  const uploadsResp = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range: `${uploadsTab}!A:Z`,
-  });
-  await ensureSheet(sheets, spreadsheetId, EXPECTATIONS_TAB, EXPECTATIONS_HEADERS);
-  const expectationsResp = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range: `${EXPECTATIONS_TAB}!A:D`,
-  });
-  let workOrdersResp;
-  try {
-    workOrdersResp = await sheets.spreadsheets.values.get({
+  const sheets = await getSheetsClient();
+  const [sitesResp, fallbackSitesResp, uploadsResp, expectationsResp, workOrdersResp] = await Promise.all([
+    sheets.spreadsheets.values.get({
       spreadsheetId,
-      range: `${workOrdersTab}!A:Z`,
-    });
-  } catch {
-    workOrdersResp = { data: { values: [] } };
-  }
+      range: `${quoteSheetTitle(sitesTab)}!A:AZ`,
+    }),
+    sheets.spreadsheets.values
+      .get({
+        spreadsheetId,
+        range: "Sites!A:Z",
+      })
+      .catch(() => ({ data: { values: [] } })),
+    sheets.spreadsheets.values.get({
+      spreadsheetId,
+      range: `${uploadsTab}!A:Z`,
+    }),
+    sheets.spreadsheets.values
+      .get({
+        spreadsheetId,
+        range: `${EXPECTATIONS_TAB}!A:D`,
+      })
+      .catch(() => ({ data: { values: [] } })),
+    sheets.spreadsheets.values
+      .get({
+        spreadsheetId,
+        range: `${workOrdersTab}!A:Z`,
+      })
+      .catch(() => ({ data: { values: [] } })),
+  ]);
 
   const sites = mergeSiteRows(
     parseSites(sitesResp.data.values ?? []),
     parseLegacySites(fallbackSitesResp.data.values ?? [])
   );
-  const subCompanyOverrides = await readSubCompanyOverrides(sheets, spreadsheetId);
+  const subCompanyOverrides = parseSubCompanyOverrides(sitesResp.data.values ?? []);
   const expectations = parseMonthlyExpectations(expectationsResp.data.values ?? []);
   const uploads = parseUploads(uploadsResp.data.values ?? [], timeZone);
   const workOrders = parseWorkOrders(workOrdersResp.data.values ?? []);
-  const months = monthParam
-    ? [monthParam]
-    : Array.from(new Set([...uploads.months, currentMonth(timeZone)])).sort().reverse();
+  const availableMonths = Array.from(new Set([...uploads.months, currentMonth(timeZone)])).sort().reverse();
+  const reportMonths = monthParam ? [monthParam] : [availableMonths[0] ?? currentMonth(timeZone)];
 
-  const summary: MonthlyServiceRow[] = months
+  const summary: MonthlyServiceRow[] = reportMonths
     .flatMap((month) =>
       sites.flatMap((site) => {
         const monthWorkOrderNumber = site.workOrdersByMonth.get(month.slice(5, 7)) ?? "";
@@ -596,10 +614,15 @@ export async function refreshMonthlyServiceReport(monthParam?: string) {
     });
 
   const missed = summary.filter((row) => row.status === "LOW" || row.status === "MISSING");
-  await replaceTab(sheets, spreadsheetId, SUMMARY_TAB, [SUMMARY_HEADERS, ...summary.map(rowToValues)]);
-  await replaceTab(sheets, spreadsheetId, MISSED_TAB, [SUMMARY_HEADERS, ...missed.map(rowToValues)]);
+  const report = { month: monthParam || reportMonths[0] || "", months: availableMonths, summary, missed };
 
-  return { month: monthParam || "", months, summary, missed };
+  if (options.writeSheets) {
+    await replaceTab(sheets, spreadsheetId, SUMMARY_TAB, [SUMMARY_HEADERS, ...summary.map(rowToValues)]);
+    await replaceTab(sheets, spreadsheetId, MISSED_TAB, [SUMMARY_HEADERS, ...missed.map(rowToValues)]);
+  }
+
+  reportCache.set(cacheKey, { expiresAt: Date.now() + REPORT_CACHE_TTL_MS, report });
+  return report;
 }
 
 export async function setMonthlyExpectedServices(params: {
@@ -659,5 +682,5 @@ export async function setMonthlyExpectedServices(params: {
     });
   }
 
-  return refreshMonthlyServiceReport(month);
+  return refreshMonthlyServiceReport(month, { force: true, writeSheets: true });
 }

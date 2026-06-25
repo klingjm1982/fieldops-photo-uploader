@@ -15,7 +15,9 @@ export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
     const month = searchParams.get("month") || undefined;
-    const report = await refreshMonthlyServiceReport(month);
+    const force = searchParams.get("refresh") === "1" || searchParams.get("force") === "1";
+    const writeSheets = searchParams.get("writeSheets") === "1";
+    const report = await refreshMonthlyServiceReport(month, { force, writeSheets });
     return NextResponse.json(report);
   } catch (e: unknown) {
     console.error("Monthly report error:", e);
@@ -37,6 +39,14 @@ export async function POST(req: Request) {
         siteId: String(body.siteId ?? "all"),
         expectedServices: Number(body.expectedServices),
         notes: String(body.notes ?? ""),
+      });
+      return NextResponse.json({ ok: true, ...report });
+    }
+
+    if (action === "refreshSheets") {
+      const report = await refreshMonthlyServiceReport(String(body.month ?? "").trim() || undefined, {
+        force: true,
+        writeSheets: true,
       });
       return NextResponse.json({ ok: true, ...report });
     }

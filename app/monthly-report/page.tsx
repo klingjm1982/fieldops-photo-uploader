@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 
 type MonthlyStatus = "OK" | "LOW" | "MISSING";
 
@@ -24,6 +24,7 @@ type MonthlyServiceRow = {
 };
 
 type ReportResponse = {
+  month: string;
   months: string[];
   summary: MonthlyServiceRow[];
 };
@@ -214,20 +215,21 @@ export default function MonthlyReportPage() {
   const [serviceRate, setServiceRate] = useState("");
   const [expectedServicesOverride, setExpectedServicesOverride] = useState("");
   const [savingExpectedServices, setSavingExpectedServices] = useState(false);
+  const [refreshingSheets, setRefreshingSheets] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [selectedReminderKeys, setSelectedReminderKeys] = useState<string[]>([]);
   const [selectedReminderSubCompanies, setSelectedReminderSubCompanies] = useState<string[]>([]);
   const [sendingReminders, setSendingReminders] = useState(false);
   const [reminderPreview, setReminderPreview] = useState("");
 
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadReport() {
+  const loadReport = useCallback(async (requestedMonth?: string, cancelled?: () => boolean) => {
       try {
         setLoading(true);
         setError(null);
-        const res = await fetch("/api/monthly-report", { cache: "no-store" });
+        const path = requestedMonth
+          ? `/api/monthly-report?month=${encodeURIComponent(requestedMonth)}`
+          : "/api/monthly-report";
+        const res = await fetch(path, { cache: "no-store" });
         const json = (await res.json().catch(() => ({}))) as Partial<ReportResponse> & {
           message?: string;
         };
@@ -236,24 +238,27 @@ export default function MonthlyReportPage() {
         const nextRows = Array.isArray(json.summary) ? json.summary : [];
         const nextMonths = Array.isArray(json.months) ? json.months : unique(nextRows.map((r) => r.month));
 
-        if (!cancelled) {
+        if (!cancelled?.()) {
           setRows(nextRows);
           setMonths(nextMonths);
-          setMonth(nextMonths[0] ?? "");
+          setMonth(requestedMonth || json.month || nextMonths[0] || "");
         }
       } catch (e: unknown) {
         console.error("monthly report fetch failed:", e);
-        if (!cancelled) setError(errorMessage(e) || "Failed to load monthly report");
+        if (!cancelled?.()) setError(errorMessage(e) || "Failed to load monthly report");
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!cancelled?.()) setLoading(false);
       }
-    }
+    }, []);
 
-    loadReport();
+  useEffect(() => {
+    let cancelled = false;
+
+    loadReport(undefined, () => cancelled);
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [loadReport]);
 
   const clientNames = useMemo(() => unique(rows.map((r) => r.clientName)), [rows]);
   const subCompanies = useMemo(() => unique(rows.map((r) => r.subCompany)), [rows]);
@@ -519,6 +524,36 @@ export default function MonthlyReportPage() {
     }
   }
 
+  async function refreshGoogleSummaryTabs() {
+    try {
+      setRefreshingSheets(true);
+      setError(null);
+      setMessage(null);
+      const res = await fetch("/api/monthly-report", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "refreshSheets",
+          month,
+        }),
+      });
+      const json = (await res.json().catch(() => ({}))) as Partial<ReportResponse> & {
+        message?: string;
+      };
+      if (!res.ok) throw new Error(json.message ?? `HTTP ${res.status}`);
+
+      const nextRows = Array.isArray(json.summary) ? json.summary : [];
+      const nextMonths = Array.isArray(json.months) ? json.months : unique(nextRows.map((r) => r.month));
+      setRows(nextRows);
+      setMonths(nextMonths);
+      setMessage(`Google summary tabs refreshed for ${month}.`);
+    } catch (e: unknown) {
+      setError(errorMessage(e) || "Failed to refresh Google summary tabs");
+    } finally {
+      setRefreshingSheets(false);
+    }
+  }
+
   const controlStyle: React.CSSProperties = {
     minWidth: 160,
     flex: "1 1 160px",
@@ -580,7 +615,15 @@ export default function MonthlyReportPage() {
               borderRadius: 8,
             }}
           >
-            <select value={month} onChange={(e) => setMonth(e.target.value)} style={controlStyle}>
+            <select
+              value={month}
+              onChange={(e) => {
+                const nextMonth = e.target.value;
+                setMonth(nextMonth);
+                loadReport(nextMonth);
+              }}
+              style={controlStyle}
+            >
               {months.map((m) => (
                 <option key={m} value={m}>
                   {m}
@@ -833,6 +876,14 @@ export default function MonthlyReportPage() {
               style={{ ...controlStyle, flex: "0 1 230px", fontWeight: 800, cursor: "pointer" }}
             >
               Save Expected For Month
+            </button>
+            <button
+              type="button"
+              onClick={refreshGoogleSummaryTabs}
+              disabled={refreshingSheets || !month}
+              style={{ ...controlStyle, flex: "0 1 230px", fontWeight: 800, cursor: "pointer" }}
+            >
+              {refreshingSheets ? "Refreshing Sheets..." : "Refresh Google Tabs"}
             </button>
           </section>
 
