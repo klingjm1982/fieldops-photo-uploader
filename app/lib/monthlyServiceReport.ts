@@ -436,6 +436,7 @@ function parseUploads(rows: unknown[][], timeZone: string) {
   const linksIdx = headerIndex(headers, ["driveLinks", "driveLink"], 6);
   const filenamesIdx = headerIndex(headers, ["originalFilenames", "originalFilename"], 7);
   const notesIdx = headerIndex(headers, ["notes"], 9);
+  const serviceDateIdx = headerIndex(headers, ["serviceDate", "service date"], -1);
   const groups = new Set<string>();
   const lastUploadByMonthSite = new Map<string, string>();
   const months = new Set<string>();
@@ -451,14 +452,17 @@ function parseUploads(rows: unknown[][], timeZone: string) {
       Boolean(cell(r, filenamesIdx));
     const isManualUpload = !hasPhotoEvidence || manualText.includes("manual") || manualText.includes("no photo");
     const parts = localDateParts(cell(r, timestampIdx), timeZone, isManualUpload);
-    if (siteIds.length === 0 || !parts) continue;
+    const serviceParts = dateOnlyParts(cell(r, serviceDateIdx)) ?? parts;
+    if (siteIds.length === 0 || !serviceParts) continue;
 
-    months.add(parts.month);
+    months.add(serviceParts.month);
     for (const siteId of siteIds) {
-      groups.add(`${parts.month}::${siteId}::${parts.date}`);
-      const monthSiteKey = `${parts.month}::${siteId}`;
+      groups.add(`${serviceParts.month}::${siteId}::${serviceParts.date}`);
+      const monthSiteKey = `${serviceParts.month}::${siteId}`;
       const currentLast = lastUploadByMonthSite.get(monthSiteKey);
-      if (!currentLast || parts.date > currentLast) lastUploadByMonthSite.set(monthSiteKey, parts.date);
+      if (!currentLast || serviceParts.date > currentLast) {
+        lastUploadByMonthSite.set(monthSiteKey, serviceParts.date);
+      }
     }
   }
 

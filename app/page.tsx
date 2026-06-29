@@ -16,6 +16,12 @@ function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
+function todayInputValue() {
+  const now = new Date();
+  const offsetMs = now.getTimezoneOffset() * 60_000;
+  return new Date(now.getTime() - offsetMs).toISOString().slice(0, 10);
+}
+
 export default function Page() {
   const [sites, setSites] = useState<Site[]>([]);
   const [loading, setLoading] = useState(true);
@@ -23,6 +29,7 @@ export default function Page() {
 
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<Site | null>(null);
+  const [serviceDate, setServiceDate] = useState(todayInputValue);
 
   const [uploading, setUploading] = useState(false);
   const [uploadMsg, setUploadMsg] = useState<string | null>(null);
@@ -77,6 +84,7 @@ export default function Page() {
   function resetForm() {
     setSelected(null);
     setQuery("");
+    setServiceDate(todayInputValue());
     setUploadMsg(null);
     setUploadedCount(0);
     setTotalToUpload(0);
@@ -134,6 +142,7 @@ export default function Page() {
     form.append("siteId", selected?.siteId ?? "");
     form.append("folderId", selected?.folderId ?? "");
     form.append("displayName", selected?.displayName ?? "");
+    form.append("serviceDate", serviceDate);
 
     setStage("uploading");
 
@@ -295,6 +304,38 @@ export default function Page() {
               ))}
             </div>
           )}
+
+          <label
+            style={{
+              display: "block",
+              fontWeight: 800,
+              marginTop: 14,
+              marginBottom: 6,
+              color: "#1f2937",
+            }}
+          >
+            Service Date
+          </label>
+
+          <input
+            type="date"
+            value={serviceDate}
+            onChange={(e) => setServiceDate(e.target.value)}
+            max={todayInputValue()}
+            style={{
+              width: "100%",
+              padding: 12,
+              borderRadius: 10,
+              border: "1px solid #9ca3af",
+              background: "#fff",
+              color: "#111827",
+              fontSize: 16,
+              fontWeight: 700,
+            }}
+          />
+          <div style={{ color: "#475569", fontSize: 13, marginTop: 6 }}>
+            Use the actual day the service was performed, even if photos are uploaded later.
+          </div>
 
           <div
             style={{

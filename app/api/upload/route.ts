@@ -97,6 +97,12 @@ function weekFolderName(parts: Pick<LocalTimeParts, "year" | "month" | "day">) {
   return `${year}-W${String(week).padStart(2, "0")}`;
 }
 
+function datePartsFromServiceDate(serviceDate: string) {
+  const match = serviceDate.match(/^(20\d{2})-([01]\d)-([0-3]\d)$/);
+  if (!match) return null;
+  return { year: match[1], month: match[2], day: match[3], date: serviceDate };
+}
+
 async function getDriveClient() {
   const { clientEmail, privateKey } = readServiceAccount();
   const auth = new google.auth.JWT({
@@ -164,6 +170,7 @@ async function getWebViewLink(drive: any, fileId: string) {
 // ---------- Sheets append helper ----------
 async function appendUploadLogRow(params: {
   timestampISO: string;
+  serviceDate: string;
   address: string;
   siteId: string;
   addressFolderId: string;
@@ -180,6 +187,20 @@ async function appendUploadLogRow(params: {
   if (!sheetId) throw new Error("Missing GOOGLE_SHEET_ID");
 
   const sheets = await getSheetsClient();
+  const headerResp = await sheets.spreadsheets.values.get({
+    spreadsheetId: sheetId,
+    range: `${tab}!A1:K1`,
+  });
+  const headers = headerResp.data.values?.[0] ?? [];
+  const hasServiceDateHeader = headers.some((header) => String(header ?? "").trim().toLowerCase() === "servicedate");
+  if (!hasServiceDateHeader) {
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: sheetId,
+      range: `${tab}!K1`,
+      valueInputOption: "USER_ENTERED",
+      requestBody: { values: [["serviceDate"]] },
+    });
+  }
 
   // One row summary. Store multiple links/ids as newline-separated text.
   const values = [[
@@ -193,11 +214,12 @@ async function appendUploadLogRow(params: {
     params.originalFilenames.join("\n"),                       // OriginalFilename column: list
     params.uploadedBy || "",
     params.notes || "",
+    params.serviceDate,
   ]];
 
   await sheets.spreadsheets.values.append({
     spreadsheetId: sheetId,
-    range: `${tab}!A:J`,
+    range: `${tab}!A:K`,
     valueInputOption: "USER_ENTERED",
     insertDataOption: "INSERT_ROWS",
     requestBody: { values },
@@ -217,6 +239,7 @@ export async function POST(req: Request) {
     const folderId = String(form.get("folderId") ?? "");
     const siteId = String(form.get("siteId") ?? "");
     const displayName = String(form.get("displayName") ?? "");
+    const requestedServiceDate = String(form.get("serviceDate") ?? "").trim();
     const uploadedBy = String(form.get("uploadedBy") ?? "");
     const notes = String(form.get("notes") ?? "");
 
@@ -232,7 +255,10 @@ export async function POST(req: Request) {
     const timeZone = process.env.SERVICE_TIME_ZONE || "America/Chicago";
     const now = new Date();
     const localNow = localTimeParts(now, timeZone);
-    const weekName = weekFolderName(localNow);
+    const requestedServiceParts = datePartsFromServiceDate(requestedServiceDate);
+    const serviceDate = requestedServiceParts?.date ?? localNow.date;
+    const serviceParts = requestedServiceParts ?? localNow;
+    const weekName = weekFolderName(serviceParts);
 
     // One weekly folder operation per batch
     const weekFolderId = await findOrCreateWeeklySubfolder(drive, folderId, weekName);
@@ -250,7 +276,7 @@ export async function POST(req: Request) {
 
       const original = f.name || "upload.jpg";
       const safeName = original.replace(/[^\w.\-]+/g, "_");
-      const finalName = `${localNow.fileStamp}_${safeName}`;
+      const finalName = `${serviceDate}_uploaded-${localNow.fileStamp}_${safeName}`;
 
       const created = await drive.files.create({
         requestBody: {
@@ -281,6 +307,7 @@ export async function POST(req: Request) {
     try {
       await appendUploadLogRow({
         timestampISO: localNow.iso,
+        serviceDate,
         address: displayName,
         siteId,
         addressFolderId: folderId,
@@ -295,7 +322,7 @@ export async function POST(req: Request) {
       sheetLogged = true;
 
       try {
-        const month = localNow.date.slice(0, 7);
+        const month = serviceDate.slice(0, 7);
         const result = await buildCorrigoQueue(month);
         corrigoQueueCreated = result.created;
       } catch (err: any) {
@@ -326,6 +353,7 @@ export async function POST(req: Request) {
           `New photo batch uploaded\n\n` +
           `Address: ${displayName}\n` +
           `SiteId: ${siteId}\n` +
+          `Service Date: ${serviceDate}\n` +
           `Week Folder: ${weekName}\n` +
           `Week Folder Link: ${weekFolderLink}\n` +
           `Files Uploaded: ${driveFileIds.length}\n` +
@@ -352,6 +380,7 @@ export async function POST(req: Request) {
         address: displayName,
         addressFolderId: folderId,
       },
+      serviceDate,
       files: driveFileIds.map((id, i) => ({
         driveFileId: id,
         webViewLink: driveLinks[i] || "",

@@ -194,6 +194,12 @@ function localDateParts(value: string, timeZone: string) {
   return { month: `${year}-${month}`, date: `${year}-${month}-${day}` };
 }
 
+function dateOnlyParts(value: string) {
+  const match = value.trim().match(/^(20\d{2})-([01]\d)-([0-3]\d)$/);
+  if (!match) return null;
+  return { month: `${match[1]}-${match[2]}`, date: `${match[1]}-${match[2]}-${match[3]}` };
+}
+
 function currentMonth(timeZone: string) {
   const now = new Date();
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -407,19 +413,21 @@ function parseUploadGroups(rows: unknown[][], timeZone: string, month: string) {
   const countIdx = headerIndex(headers, ["count", "fileCount", "driveFileId"], 5);
   const linksIdx = headerIndex(headers, ["driveLinks", "driveLink"], 6);
   const filenamesIdx = headerIndex(headers, ["originalFilenames", "originalFilename"], 7);
+  const serviceDateIdx = headerIndex(headers, ["serviceDate", "service date"], -1);
   const groups = new Map<string, UploadGroup>();
 
   for (const row of body) {
     const timestamp = cell(row, timestampIdx);
     const parts = localDateParts(timestamp, timeZone);
     const siteId = cell(row, siteIdx);
-    if (!parts || parts.month !== month || !siteId) continue;
+    if (!parts || !siteId) continue;
 
     const countText = cell(row, countIdx);
     const parsedCount = Number(countText.match(/\d+/)?.[0] ?? "0");
     const links = splitLines(cell(row, linksIdx));
     const filenames = splitLines(cell(row, filenamesIdx));
-    const serviceDate = serviceDateFromFilenames(filenames, parts.date);
+    const explicitServiceParts = dateOnlyParts(cell(row, serviceDateIdx));
+    const serviceDate = explicitServiceParts?.date ?? serviceDateFromFilenames(filenames, parts.date);
     const serviceMonth = serviceDate.slice(0, 7);
     if (serviceMonth !== month) continue;
 
@@ -461,6 +469,7 @@ function matchingUploadLogRowNumbers(rows: unknown[][], timeZone: string, siteId
   const timestampIdx = headerIndex(headers, ["timestamp", "timestampISO", "uploadedAt"], 0);
   const siteIdx = headerIndex(headers, ["siteId"], 2);
   const filenamesIdx = headerIndex(headers, ["originalFilenames", "originalFilename"], 7);
+  const serviceDateIdx = headerIndex(headers, ["serviceDate", "service date"], -1);
 
   return body
     .map((row, index) => {
@@ -470,7 +479,7 @@ function matchingUploadLogRowNumbers(rows: unknown[][], timeZone: string, siteId
       if (!parts || rowSiteId !== siteId) return 0;
 
       const filenames = splitLines(cell(row, filenamesIdx));
-      const rowServiceDate = serviceDateFromFilenames(filenames, parts.date);
+      const rowServiceDate = dateOnlyParts(cell(row, serviceDateIdx))?.date ?? serviceDateFromFilenames(filenames, parts.date);
       return rowServiceDate === serviceDate ? index + rowOffset : 0;
     })
     .filter((rowNumber) => rowNumber > 0);
