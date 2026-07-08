@@ -282,6 +282,7 @@ async function main() {
   let rows = state.queue
     .filter((row) => allPending || row.workOrderNumber === workOrder)
     .filter((row) => row.status === "Pending Corrigo Upload")
+    .filter((row) => requestedDates.size > 0 || row.serviceDate.startsWith(`${month}-`))
     .filter((row) => requestedDates.size === 0 || requestedDates.has(row.serviceDate))
     .sort((a, b) => {
       const dateCompare = a.serviceDate.localeCompare(b.serviceDate);
@@ -352,7 +353,7 @@ async function main() {
         "run",
         "corrigo:test-prepare",
         "--",
-        `--month=${month}`,
+        `--month=${row.month || row.serviceDate.slice(0, 7)}`,
         `--work-order=${row.workOrderNumber}`,
         `--service-date=${row.serviceDate}`,
       ]);
