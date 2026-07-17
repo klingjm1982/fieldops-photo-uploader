@@ -11,6 +11,7 @@ type Site = {
 };
 
 const MAX_FILES_PER_UPLOAD_REQUEST = 5;
+const IMAGE_PREP_TIMEOUT_MS = 20000;
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
@@ -20,6 +21,21 @@ function todayInputValue() {
   const now = new Date();
   const offsetMs = now.getTimezoneOffset() * 60_000;
   return new Date(now.getTime() - offsetMs).toISOString().slice(0, 10);
+}
+
+function waitForNextFrame() {
+  return new Promise<void>((resolve) => {
+    requestAnimationFrame(() => resolve());
+  });
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(message)), timeoutMs);
+  });
+
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timeoutId));
 }
 
 export default function Page() {
@@ -95,14 +111,25 @@ export default function Page() {
   async function compressImage(file: File, maxW = 1600, quality = 0.72): Promise<File> {
     if (!file.type.startsWith("image/")) return file;
 
+    await waitForNextFrame();
+
     const img = document.createElement("img");
     const url = URL.createObjectURL(file);
 
-    await new Promise<void>((resolve, reject) => {
-      img.onload = () => resolve();
-      img.onerror = reject;
-      img.src = url;
-    });
+    try {
+      await withTimeout(
+        new Promise<void>((resolve, reject) => {
+          img.onload = () => resolve();
+          img.onerror = () => reject(new Error(`Could not prepare ${file.name || "photo"}`));
+          img.src = url;
+        }),
+        IMAGE_PREP_TIMEOUT_MS,
+        `Phone took too long preparing ${file.name || "photo"}. Try fewer photos at once.`
+      );
+    } catch (error) {
+      URL.revokeObjectURL(url);
+      throw error;
+    }
 
     const scale = Math.min(1, maxW / img.width);
     const w = Math.round(img.width * scale);
@@ -121,8 +148,10 @@ export default function Page() {
     ctx.drawImage(img, 0, 0, w, h);
     URL.revokeObjectURL(url);
 
-    const blob: Blob | null = await new Promise((resolve) =>
-      canvas.toBlob((b) => resolve(b), "image/jpeg", quality)
+    const blob: Blob | null = await withTimeout(
+      new Promise((resolve) => canvas.toBlob((b) => resolve(b), "image/jpeg", quality)),
+      IMAGE_PREP_TIMEOUT_MS,
+      `Phone took too long compressing ${file.name || "photo"}. Try fewer photos at once.`
     );
 
     if (!blob) return file;
@@ -165,7 +194,7 @@ export default function Page() {
     }
 
     setUploading(true);
-    setUploadMsg(null);
+    setUploadMsg(`Preparing ${files.length} photo(s). Keep this page open.`);
     setUploadedCount(0);
     setTotalToUpload(files.length);
     setStage("preparing");
@@ -177,6 +206,7 @@ export default function Page() {
         const chunk = files.slice(i, i + MAX_FILES_PER_UPLOAD_REQUEST);
         const uploadedInChunk = await uploadChunk(chunk, () => {
           setUploadedCount((c) => c + 1);
+          setUploadMsg("Preparing photos. Keep this page open.");
         });
         uploadedTotal += uploadedInChunk;
       }
@@ -207,6 +237,30 @@ export default function Page() {
   }
 
   const actionDisabled = !selected || uploading;
+  const pickerLabelStyle: React.CSSProperties = {
+    position: "relative",
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: "10px 14px",
+    borderRadius: 10,
+    border: `1px solid ${actionDisabled ? "#cbd5e1" : "#334155"}`,
+    background: actionDisabled ? "#f8fafc" : "#172033",
+    color: actionDisabled ? "#475569" : "#fff",
+    cursor: actionDisabled ? "not-allowed" : "pointer",
+    fontWeight: 800,
+    opacity: 1,
+    overflow: "hidden",
+    minHeight: 44,
+  };
+  const fileInputStyle: React.CSSProperties = {
+    position: "absolute",
+    inset: 0,
+    width: "100%",
+    height: "100%",
+    opacity: 0,
+    cursor: actionDisabled ? "not-allowed" : "pointer",
+  };
 
   return (
     <main style={{ minHeight: "100vh", background: "#f6f8fb", color: "#172033" }}>
@@ -305,6 +359,22 @@ export default function Page() {
             </div>
           )}
 
+          {selected && (
+            <div
+              style={{
+                marginTop: 8,
+                padding: "10px 12px",
+                borderRadius: 10,
+                border: "1px solid #bbf7d0",
+                background: "#f0fdf4",
+                color: "#14532d",
+                fontWeight: 800,
+              }}
+            >
+              Selected: {selected.displayName}
+            </div>
+          )}
+
           <label
             style={{
               display: "block",
@@ -349,41 +419,32 @@ export default function Page() {
             <div style={{ fontWeight: 800, marginBottom: 10, color: "#1f2937" }}>Upload Photos</div>
 
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-              <button
-                type="button"
-                disabled={actionDisabled}
-                onClick={() => cameraInputRef.current?.click()}
-                style={{
-                  padding: "10px 14px",
-                  borderRadius: 10,
-                  border: `1px solid ${actionDisabled ? "#cbd5e1" : "#334155"}`,
-                  background: actionDisabled ? "#f8fafc" : "#172033",
-                  color: actionDisabled ? "#475569" : "#fff",
-                  cursor: actionDisabled ? "not-allowed" : "pointer",
-                  fontWeight: 800,
-                  opacity: 1,
-                }}
-              >
+              <label style={pickerLabelStyle}>
                 📷 Camera
-              </button>
+                <input
+                  ref={cameraInputRef}
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  multiple
+                  disabled={actionDisabled}
+                  onChange={onPickFiles}
+                  style={fileInputStyle}
+                />
+              </label>
 
-              <button
-                type="button"
-                disabled={actionDisabled}
-                onClick={() => libraryInputRef.current?.click()}
-                style={{
-                  padding: "10px 14px",
-                  borderRadius: 10,
-                  border: `1px solid ${actionDisabled ? "#cbd5e1" : "#334155"}`,
-                  background: actionDisabled ? "#f8fafc" : "#172033",
-                  color: actionDisabled ? "#475569" : "#fff",
-                  cursor: actionDisabled ? "not-allowed" : "pointer",
-                  fontWeight: 800,
-                  opacity: 1,
-                }}
-              >
+              <label style={pickerLabelStyle}>
                 🖼️ Photo Library (multi)
-              </button>
+                <input
+                  ref={libraryInputRef}
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  disabled={actionDisabled}
+                  onChange={onPickFiles}
+                  style={fileInputStyle}
+                />
+              </label>
             </div>
 
             <p style={{ margin: "10px 0 0", color: "#374151", fontSize: 13 }}>
@@ -391,24 +452,11 @@ export default function Page() {
               captures one new photo at a time.
             </p>
 
-            <input
-              ref={cameraInputRef}
-              type="file"
-              accept="image/*"
-              capture="environment"
-              multiple
-              onChange={onPickFiles}
-              style={{ display: "none" }}
-            />
-
-            <input
-              ref={libraryInputRef}
-              type="file"
-              accept="image/*"
-              multiple
-              onChange={onPickFiles}
-              style={{ display: "none" }}
-            />
+            {!selected && (
+              <p style={{ margin: "10px 0 0", color: "#9a3412", fontSize: 13, fontWeight: 700 }}>
+                Tap an address from the dropdown before choosing photos.
+              </p>
+            )}
 
             {uploading && totalToUpload > 0 && (
               <p style={{ marginTop: 10 }}>
