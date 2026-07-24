@@ -25,6 +25,17 @@ function safePathPart(value) {
     .slice(0, 80);
 }
 
+function readManifestQueueIds(manifestPath) {
+  if (!manifestPath) return new Set();
+  const parsed = JSON.parse(readFileSync(manifestPath, "utf8"));
+  const rows = Array.isArray(parsed) ? parsed : parsed.rows ?? [];
+  return new Set(
+    rows
+      .map((row) => String(row.queueId ?? row).trim())
+      .filter(Boolean)
+  );
+}
+
 async function ask(message) {
   const rl = readline.createInterface({ input, output });
   try {
@@ -250,6 +261,7 @@ async function main() {
   const month = argValue("month") || "2026-06";
   const workOrder = argValue("work-order");
   const serviceDateArg = argValue("service-date") || argValue("service-dates");
+  const manifestPath = argValue("manifest");
   const corrigoUrl = argValue("url") || "https://am-desktop.corrigopro.com";
   const limit = Number(argValue("limit") || "0");
   const maxPhotosPerDrag = Number(argValue("max-photos-per-drag") || "10");
@@ -265,10 +277,13 @@ async function main() {
   const closeFinderAfterDrag = process.argv.includes("--close-finder-after-drag");
   const continuous = process.argv.includes("--continuous");
   const instant = process.argv.includes("--instant");
+  const dryRun = process.argv.includes("--dry-run");
 
-  if (!workOrder && !allPending) {
+  const manifestQueueIds = readManifestQueueIds(manifestPath);
+
+  if (!workOrder && !allPending && manifestQueueIds.size === 0) {
     throw new Error(
-      "Usage: npm run corrigo:upload-queue -- --work-order=304050184 --service-date=2026-06-03,2026-06-11 OR --all-pending --limit=100"
+      "Usage: npm run corrigo:upload-queue -- --work-order=304050184 --service-date=2026-06-03,2026-06-11 OR --all-pending --limit=100 OR --manifest=/path/to/manifest.json"
     );
   }
 
@@ -280,9 +295,9 @@ async function main() {
 
   const state = await apiGet(month);
   let rows = state.queue
-    .filter((row) => allPending || row.workOrderNumber === workOrder)
-    .filter((row) => row.status === "Pending Corrigo Upload")
-    .filter((row) => requestedDates.size > 0 || row.serviceDate.startsWith(`${month}-`))
+    .filter((row) => manifestQueueIds.size > 0 ? manifestQueueIds.has(row.queueId) : allPending || row.workOrderNumber === workOrder)
+    .filter((row) => manifestQueueIds.size > 0 || row.status === "Pending Corrigo Upload")
+    .filter((row) => manifestQueueIds.size > 0 || requestedDates.size > 0 || row.serviceDate.startsWith(`${month}-`))
     .filter((row) => requestedDates.size === 0 || requestedDates.has(row.serviceDate))
     .sort((a, b) => {
       const dateCompare = a.serviceDate.localeCompare(b.serviceDate);
@@ -297,7 +312,7 @@ async function main() {
     return;
   }
 
-  console.log(`Found ${rows.length} pending row(s):`);
+  console.log(`Found ${rows.length} matched row(s):`);
   for (const row of rows) {
     console.log(`- WO ${row.workOrderNumber}, ${row.serviceDate}: ${row.photoCount} photo(s), ${row.address}`);
   }
@@ -319,6 +334,13 @@ async function main() {
   rows = rowsWithPhotos;
   if (rows.length === 0) {
     console.log("No queue rows with photos are ready to upload.");
+    return;
+  }
+
+  if (dryRun) {
+    const totalPhotos = rows.reduce((sum, row) => sum + (Number(row.photoCount) || 0), 0);
+    const statuses = [...new Set(rows.map((row) => row.status || "Pending Corrigo Upload"))];
+    console.log(`Dry run only. ${rows.length} row(s), ${totalPhotos} photo(s), statuses: ${statuses.join(", ")}`);
     return;
   }
 
@@ -356,6 +378,7 @@ async function main() {
         `--month=${row.month || row.serviceDate.slice(0, 7)}`,
         `--work-order=${row.workOrderNumber}`,
         `--service-date=${row.serviceDate}`,
+        `--status=${row.status || "Pending Corrigo Upload"}`,
       ]);
 
       const preparedCount = preparedPhotoCount(row.workOrderNumber, row.serviceDate);
