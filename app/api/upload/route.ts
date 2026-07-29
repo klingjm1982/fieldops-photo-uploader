@@ -8,6 +8,16 @@ import { buildCorrigoQueue } from "@/app/lib/corrigoSync";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+const HEIC_EXT_RE = /\.(heic|heif)$/i;
+
+type PreparedUploadFile = {
+  buffer: Buffer;
+  originalName: string;
+  finalOriginalName: string;
+  mimeType: string;
+  notes: string[];
+};
+
 // ---------- Email helper (SendGrid) ----------
 async function sendUploadEmail(params: { to: string; from: string; subject: string; text: string }) {
   const key = process.env.SENDGRID_API_KEY;
@@ -167,6 +177,53 @@ async function getWebViewLink(drive: any, fileId: string) {
   return String(meta.data.webViewLink || "");
 }
 
+function isHeicUpload(file: File) {
+  const type = String(file.type || "").toLowerCase();
+  return type.includes("heic") || type.includes("heif") || HEIC_EXT_RE.test(file.name || "");
+}
+
+function jpgNameForHeic(name: string) {
+  const safeBase = (name || "upload.heic").replace(/\.(heic|heif)$/i, "");
+  return `${safeBase || "upload"}.jpg`;
+}
+
+async function prepareUploadFile(file: File): Promise<PreparedUploadFile> {
+  const originalName = file.name || "upload.jpg";
+  const inputBuffer = Buffer.from(await file.arrayBuffer());
+
+  if (!isHeicUpload(file)) {
+    return {
+      buffer: inputBuffer,
+      originalName,
+      finalOriginalName: originalName,
+      mimeType: file.type || "image/jpeg",
+      notes: [],
+    };
+  }
+
+  try {
+    const mod = await import("heic-convert");
+    const convert = (mod.default || mod) as unknown as (params: {
+      buffer: Buffer;
+      format: "JPEG";
+      quality: number;
+    }) => Promise<ArrayBuffer | Buffer>;
+    const output = await convert({ buffer: inputBuffer, format: "JPEG", quality: 0.82 });
+    const jpgName = jpgNameForHeic(originalName);
+    const outputBuffer = Buffer.isBuffer(output) ? output : Buffer.from(new Uint8Array(output));
+    return {
+      buffer: outputBuffer,
+      originalName,
+      finalOriginalName: jpgName,
+      mimeType: "image/jpeg",
+      notes: [`Converted ${originalName} from HEIC/HEIF to ${jpgName}`],
+    };
+  } catch (error) {
+    console.error("HEIC conversion failed:", error);
+    throw new Error(`Could not convert ${originalName} from HEIC to JPG. Please retry or upload a JPEG version.`);
+  }
+}
+
 // ---------- Sheets append helper ----------
 async function appendUploadLogRow(params: {
   timestampISO: string;
@@ -268,13 +325,14 @@ export async function POST(req: Request) {
     const driveFileIds: string[] = [];
     const driveLinks: string[] = [];
     const originalFilenames: string[] = [];
+    const conversionNotes: string[] = [];
 
     for (const f of files) {
-      const bytes = await f.arrayBuffer();
-      const buffer = Buffer.from(bytes);
-      const bodyStream = Readable.from(buffer);
+      const prepared = await prepareUploadFile(f);
+      const bodyStream = Readable.from(prepared.buffer);
 
-      const original = f.name || "upload.jpg";
+      const original = prepared.finalOriginalName;
+      conversionNotes.push(...prepared.notes);
       const safeName = original.replace(/[^\w.\-]+/g, "_");
       const finalName = `${serviceDate}_uploaded-${localNow.fileStamp}_${safeName}`;
 
@@ -284,7 +342,7 @@ export async function POST(req: Request) {
           parents: [weekFolderId],
         },
         media: {
-          mimeType: f.type || "image/jpeg",
+          mimeType: prepared.mimeType,
           body: bodyStream,
         },
         fields: "id,webViewLink",
@@ -295,7 +353,11 @@ export async function POST(req: Request) {
       const link = String(created.data.webViewLink || "");
       if (id) driveFileIds.push(id);
       driveLinks.push(link || "");
-      originalFilenames.push(original);
+      originalFilenames.push(
+        prepared.originalName === prepared.finalOriginalName
+          ? original
+          : `${prepared.originalName} -> ${prepared.finalOriginalName}`
+      );
     }
 
     // Sheet status
@@ -317,7 +379,7 @@ export async function POST(req: Request) {
         driveLinks,
         originalFilenames,
         uploadedBy,
-        notes,
+        notes: [notes, ...conversionNotes].filter(Boolean).join(" | "),
       });
       sheetLogged = true;
 

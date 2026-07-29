@@ -12,6 +12,7 @@ type Site = {
 
 const MAX_FILES_PER_UPLOAD_REQUEST = 5;
 const IMAGE_PREP_TIMEOUT_MS = 20000;
+const HEIC_EXT_RE = /\.(heic|heif)$/i;
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
@@ -27,6 +28,11 @@ function waitForNextFrame() {
   return new Promise<void>((resolve) => {
     requestAnimationFrame(() => resolve());
   });
+}
+
+function isHeicFile(file: File) {
+  const type = file.type.toLowerCase();
+  return type.includes("heic") || type.includes("heif") || HEIC_EXT_RE.test(file.name);
 }
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
@@ -110,6 +116,7 @@ export default function Page() {
   // ---------- Client-side compression ----------
   async function compressImage(file: File, maxW = 1600, quality = 0.72): Promise<File> {
     if (!file.type.startsWith("image/")) return file;
+    if (isHeicFile(file)) return file;
 
     await waitForNextFrame();
 
