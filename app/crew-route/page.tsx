@@ -50,6 +50,15 @@ function dayNumber(value: string) {
   );
 }
 
+function crewRouteErrorMessage(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  const lower = message.toLowerCase();
+  if (lower.includes("quota exceeded") || lower.includes("read requests per minute")) {
+    return "The route is refreshing too often right now. Wait about one minute, then tap refresh.";
+  }
+  return message || "Could not load this week’s route.";
+}
+
 export default async function CrewRoutePage({
   searchParams,
 }: {
@@ -102,7 +111,7 @@ export default async function CrewRoutePage({
   try {
     weekStops = await getCrewRouteWeekStops(access.crewId, access.weekStart, access.weekEnd);
   } catch (caught: unknown) {
-    routeError = caught instanceof Error ? caught.message : "Could not load this week’s route.";
+    routeError = crewRouteErrorMessage(caught);
   }
   const stops = weekStops.filter((stop) => stop.date === selectedDate);
   try {

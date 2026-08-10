@@ -19,6 +19,9 @@ const HEADERS = [
   "updatedAt",
 ];
 
+const ROUTE_PROGRESS_CACHE_TTL_MS = Number(process.env.ROUTE_PROGRESS_CACHE_TTL_MS || 60_000);
+const routeProgressCache = new Map<string, { expiresAt: number; entries: RouteProgressEntry[] }>();
+
 export type RouteProgressEntry = {
   date: string;
   crewId: string;
@@ -122,6 +125,12 @@ export async function getRouteProgress(
 ) {
   const spreadsheetId = process.env.GOOGLE_SHEET_ID;
   if (!spreadsheetId) throw new Error("Missing GOOGLE_SHEET_ID");
+  const normalizedCrewId = crewId.trim().toLowerCase();
+  const stopsKey = stops.map((stop) => routeStopKey(stop.siteId, stop.address)).sort().join("|");
+  const cacheKey = `${normalizedCrewId}|${date}|${stopsKey}`;
+  const cached = routeProgressCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.entries;
+
   const sheets = await sheetsClient(true);
   let response;
   try {
@@ -135,7 +144,6 @@ export async function getRouteProgress(
     throw error;
   }
 
-  const normalizedCrewId = crewId.trim().toLowerCase();
   const latestByStop = new Map<string, RouteProgressEntry>();
   const progressValues = response.data.valueRanges?.[0]?.values ?? [];
   const uploadValues = response.data.valueRanges?.[1]?.values ?? [];
@@ -168,7 +176,9 @@ export async function getRouteProgress(
     if (entry.date !== date || entry.crewId.toLowerCase() !== normalizedCrewId) continue;
     latestByStop.set(entry.stopKey, entry);
   }
-  return [...latestByStop.values()];
+  const entries = [...latestByStop.values()];
+  routeProgressCache.set(cacheKey, { expiresAt: Date.now() + ROUTE_PROGRESS_CACHE_TTL_MS, entries });
+  return entries;
 }
 
 export async function recordRouteCompletion(entry: RouteProgressEntry) {
@@ -212,5 +222,6 @@ export async function recordRouteCompletion(entry: RouteProgressEntry) {
       ]],
     },
   });
+  routeProgressCache.clear();
   return entry;
 }

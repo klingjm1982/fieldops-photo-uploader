@@ -19,6 +19,9 @@ export type CrewRouteStop = {
   longitude?: number;
 };
 
+const CREW_ROUTE_CACHE_TTL_MS = Number(process.env.CREW_ROUTE_CACHE_TTL_MS || 120_000);
+const crewRouteCache = new Map<string, { expiresAt: number; stops: CrewRouteStop[] }>();
+
 function normalizeHeader(value: unknown) {
   return String(value ?? "")
     .trim()
@@ -115,6 +118,10 @@ export async function getCrewRouteWeekStops(
   const tab = process.env.GOOGLE_CREW_ROUTES_TAB || "CrewRoutes";
   if (!spreadsheetId) throw new Error("Missing GOOGLE_SHEET_ID");
 
+  const cacheKey = `${tab}|${crewId.trim().toLowerCase()}|${weekStart}|${weekEnd}`;
+  const cached = crewRouteCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.stops;
+
   const sheets = await sheetsClient();
   const response = await sheets.spreadsheets.values.batchGet({
     spreadsheetId,
@@ -174,7 +181,7 @@ export async function getCrewRouteWeekStops(
   const longitudeIndex = column(headers, ["longitude", "lng", "lon"], -1);
   const normalizedCrewId = crewId.trim().toLowerCase();
 
-  return rows
+  const stops = rows
     .map((row, index) => ({
       date: normalizeRouteDate(cell(row, dateIndex)),
       crewId: cell(row, crewIdIndex),
@@ -222,6 +229,9 @@ export async function getCrewRouteWeekStops(
       latitude: row.latitude,
       longitude: row.longitude,
     }));
+
+  crewRouteCache.set(cacheKey, { expiresAt: Date.now() + CREW_ROUTE_CACHE_TTL_MS, stops });
+  return stops;
 }
 
 export async function getCrewRouteStops(crewId: string, date: string) {
