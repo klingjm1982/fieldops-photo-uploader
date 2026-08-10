@@ -2,15 +2,20 @@
 
 import Image from "next/image";
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { markRouteStopComplete } from "@/app/lib/routeCompletion";
 
 type Site = {
   siteId: string;
   displayName: string;
   address?: string;
   folderId?: string; // Drive folder id
+  propertySize?: string;
 };
 
-const MAX_FILES_PER_UPLOAD_REQUEST = 5;
+// Vercel rejects oversized request bodies before the upload handler can run.
+// One prepared photo per request keeps multi-photo selections reliable on phones.
+const MAX_FILES_PER_UPLOAD_REQUEST = 1;
+const MAX_PREPARED_FILE_BYTES = 3_500_000;
 const IMAGE_PREP_TIMEOUT_MS = 20000;
 const HEIC_EXT_RE = /\.(heic|heif)$/i;
 
@@ -44,6 +49,16 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string)
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timeoutId));
 }
 
+function normalizeLookup(value: string | undefined) {
+  return (value ?? "").trim().toLowerCase().replace(/&/g, "and").replace(/[^a-z0-9]/g, "");
+}
+
+function sameLookupValue(left: string, right: string) {
+  if (!left || !right) return false;
+  if (left === right) return true;
+  return left.length > 12 && right.length > 12 && (left.includes(right) || right.includes(left));
+}
+
 export default function Page() {
   const [sites, setSites] = useState<Site[]>([]);
   const [loading, setLoading] = useState(true);
@@ -59,6 +74,8 @@ export default function Page() {
   const [uploadedCount, setUploadedCount] = useState(0);
   const [totalToUpload, setTotalToUpload] = useState(0);
   const [stage, setStage] = useState<"idle" | "preparing" | "uploading">("idle");
+  const [routeReturnUrl, setRouteReturnUrl] = useState("");
+  const [routeCompletion, setRouteCompletion] = useState<{ crewId: string; date: string; stopKey: string } | null>(null);
 
   const cameraInputRef = useRef<HTMLInputElement | null>(null);
   const libraryInputRef = useRef<HTMLInputElement | null>(null);
@@ -78,7 +95,45 @@ export default function Page() {
         const json = await res.json();
         const sitesArray: Site[] = Array.isArray(json) ? json : (json.sites ?? []);
 
-        if (!cancelled) setSites(sitesArray);
+        if (!cancelled) {
+          setSites(sitesArray);
+          const params = new URLSearchParams(window.location.search);
+          const linkedSiteId = params.get("siteId")?.trim();
+          const linkedAddress = params.get("address")?.trim();
+          const linkedServiceDate = params.get("serviceDate")?.trim();
+          const returnTo = params.get("returnTo")?.trim() ?? "";
+          const routeCrewId = params.get("routeCrewId")?.trim() ?? "";
+          const routeDate = params.get("routeDate")?.trim() ?? "";
+          const linkedRouteStopKey = params.get("routeStopKey")?.trim() ?? "";
+          const linkedSiteIdKey = normalizeLookup(linkedSiteId);
+          const linkedAddressKey = normalizeLookup(linkedAddress);
+          const linkedSite = sitesArray.find((site) => {
+            const siteIdKey = normalizeLookup(site.siteId);
+            const folderIdKey = normalizeLookup(site.folderId);
+            const addressKey = normalizeLookup(site.address);
+            const displayNameKey = normalizeLookup(site.displayName);
+
+            return (
+              (linkedSiteIdKey && (siteIdKey === linkedSiteIdKey || folderIdKey === linkedSiteIdKey)) ||
+              sameLookupValue(addressKey, linkedAddressKey) ||
+              sameLookupValue(displayNameKey, linkedAddressKey)
+            );
+          });
+          if (linkedSite) {
+            setSelected(linkedSite);
+            setQuery(linkedSite.displayName);
+          } else if (linkedAddress) {
+            setQuery(linkedAddress);
+            setUploadMsg("Route address loaded, but it did not match an active upload site. Check the route site ID/address.");
+          }
+          if (linkedServiceDate && /^\d{4}-\d{2}-\d{2}$/.test(linkedServiceDate)) {
+            setServiceDate(linkedServiceDate);
+          }
+          if (returnTo.startsWith("/crew-route")) setRouteReturnUrl(returnTo);
+          if (routeCrewId && /^\d{4}-\d{2}-\d{2}$/.test(routeDate) && linkedRouteStopKey) {
+            setRouteCompletion({ crewId: routeCrewId, date: routeDate, stopKey: linkedRouteStopKey });
+          }
+        }
       } catch (err: unknown) {
         console.error("sites fetch failed:", err);
         if (!cancelled) setError(errorMessage(err) || "Failed to load sites");
@@ -170,7 +225,15 @@ export default function Page() {
     const form = new FormData();
 
     for (const f of files) {
-      const optimized = await compressImage(f);
+      let optimized = await compressImage(f, 1400, 0.68);
+      if (optimized.size > MAX_PREPARED_FILE_BYTES && !isHeicFile(optimized)) {
+        optimized = await compressImage(optimized, 1200, 0.55);
+      }
+      if (optimized.size > MAX_PREPARED_FILE_BYTES) {
+        throw new Error(
+          `${f.name || "This photo"} is too large to upload. Try taking it again with a lower camera resolution or use Most Compatible camera format.`
+        );
+      }
       form.append("files", optimized);
       onPrepared();
     }
@@ -188,6 +251,9 @@ export default function Page() {
     });
 
     const json = await res.json().catch(() => ({}));
+    if (res.status === 413) {
+      throw new Error("This photo is too large to upload. Try a lower-resolution photo or use Most Compatible camera format.");
+    }
     if (!res.ok) throw new Error(json?.message ?? `Upload failed (HTTP ${res.status})`);
 
     return Number(json.count ?? files.length);
@@ -219,6 +285,28 @@ export default function Page() {
       }
 
       setUploadMsg(`✅ Uploaded ${uploadedTotal} photo(s)`);
+      if (routeCompletion) {
+        markRouteStopComplete(routeCompletion.crewId, routeCompletion.date, routeCompletion.stopKey);
+        const progressBody = JSON.stringify({
+          date: routeCompletion.date,
+          stopKey: routeCompletion.stopKey,
+          status: "completed",
+          photoCount: uploadedTotal,
+        });
+        if (navigator.sendBeacon) {
+          navigator.sendBeacon(
+            "/api/route-progress",
+            new Blob([progressBody], { type: "application/json" })
+          );
+        } else {
+          void fetch("/api/route-progress", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: progressBody,
+            keepalive: true,
+          }).catch(() => undefined);
+        }
+      }
     } catch (e: unknown) {
       console.error(e);
       setUploadMsg(`❌ ${errorMessage(e) || "Upload failed"}`);
@@ -378,7 +466,35 @@ export default function Page() {
                 fontWeight: 800,
               }}
             >
-              Selected: {selected.displayName}
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+                <span>Selected: {selected.displayName}</span>
+                {selected.propertySize && (
+                  <span
+                    style={{
+                      flexShrink: 0,
+                      borderRadius: 999,
+                      padding: "4px 9px",
+                      background:
+                        selected.propertySize.toLowerCase() === "large"
+                          ? "#fee2e2"
+                          : selected.propertySize.toLowerCase() === "medium"
+                            ? "#fef3c7"
+                            : "#dbeafe",
+                      color:
+                        selected.propertySize.toLowerCase() === "large"
+                          ? "#991b1b"
+                          : selected.propertySize.toLowerCase() === "medium"
+                            ? "#92400e"
+                            : "#1e40af",
+                      fontSize: 12,
+                      fontWeight: 900,
+                      textTransform: "uppercase",
+                    }}
+                  >
+                    {selected.propertySize}
+                  </span>
+                )}
+              </div>
             </div>
           )}
 
@@ -478,7 +594,10 @@ export default function Page() {
                 {!uploading && (
                   <button
                     type="button"
-                    onClick={resetForm}
+                    onClick={() => {
+                      if (routeReturnUrl && uploadMsg.startsWith("✅")) window.location.assign(routeReturnUrl);
+                      else resetForm();
+                    }}
                     style={{
                       marginTop: 8,
                       padding: "10px 16px",
@@ -488,7 +607,7 @@ export default function Page() {
                       cursor: "pointer",
                     }}
                   >
-                    Continue
+                    {routeReturnUrl && uploadMsg.startsWith("✅") ? "Go to next route stop" : "Continue"}
                   </button>
                 )}
               </div>
