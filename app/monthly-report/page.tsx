@@ -116,6 +116,22 @@ const metricColors: Record<string, { bg: string; border: string; text: string }>
   "Missing Services": { bg: "#fff7ed", border: "#fdba74", text: "#9a3412" },
 };
 
+const MONTH_LABELS = [
+  "",
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+];
+
 function unique(values: string[]) {
   return Array.from(new Set(values.filter(Boolean))).sort((a, b) => a.localeCompare(b));
 }
@@ -153,6 +169,20 @@ function downloadCsv(filename: string, rows: unknown[][]) {
 
 function money(value: number) {
   return value.toFixed(2);
+}
+
+function monthLabel(value: string) {
+  const monthNumber = Number(value.slice(5, 7));
+  const year = value.slice(0, 4);
+  return `${MONTH_LABELS[monthNumber] || value}${year ? ` ${year}` : ""}`.trim();
+}
+
+function isValidWorkOrderNumber(value: string | undefined) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return Boolean(
+    normalized &&
+      !["#n/a", "#ref!", "#value!", "n/a", "na", "none", "-"].includes(normalized)
+  );
 }
 
 function rowKey(row: MonthlyServiceRow) {
@@ -435,6 +465,95 @@ export default function MonthlyReportPage() {
         row.lastUploadDate,
         row.status,
         row.siteId,
+      ]),
+    ]);
+  }
+
+  function exportWorkOrderEmailDrafts() {
+    const grouped = new Map<
+      string,
+      {
+        to: string;
+        subCompany: string;
+        rows: MonthlyServiceRow[];
+      }
+    >();
+
+    for (const row of filteredRows) {
+      if (!isValidWorkOrderNumber(row.workOrderNumber)) continue;
+      const subCompanyName = row.subCompany || "Subcontractor";
+      const to = String(row.subEmail || "").trim();
+      const key = [to.toLowerCase(), subCompanyName.toLowerCase()].join("::");
+      const current = grouped.get(key) ?? { to, subCompany: subCompanyName, rows: [] };
+      current.rows.push(row);
+      grouped.set(key, current);
+    }
+
+    const drafts = Array.from(grouped.values())
+      .map((group) => {
+        const sortedRows = group.rows
+          .slice()
+          .sort((a, b) => a.address.localeCompare(b.address));
+        const totalServices = sortedRows.reduce(
+          (sum, row) => sum + (Number(row.expectedServices) || 0),
+          0
+        );
+        const workOrderLines = sortedRows
+          .map(
+            (row) =>
+              `WO# ${row.workOrderNumber || ""} - ${row.address}`
+          )
+          .join("\n");
+        const serviceCountText = `${totalServices || sortedRows.length} ${
+          (totalServices || sortedRows.length) === 1 ? "Service" : "Services"
+        }`;
+        const body = [
+          "Good Morning:",
+          "",
+          `${serviceCountText} this month; please see the work orders and addresses below.`,
+          "",
+          workOrderLines,
+          "",
+          "As a reminder the link below is the only way photos are to be submitted (no photos = no payment, this is Take 5's rule not ours). All photos are expected within 48 hours of service. Thank you for assisting in streamlining this process.",
+          "",
+          "FIELD OPS Photo Upload: https://fieldops-photo-uploader.vercel.app/",
+        ].join("\n");
+
+        return {
+          to: group.to,
+          subCompany: group.subCompany,
+          subject: `FIELD OPS ${monthLabel(month)} Work Orders`,
+          workOrderCount: sortedRows.length,
+          expectedServices: totalServices,
+          workOrders: sortedRows.map((row) => row.workOrderNumber || "").join("; "),
+          addresses: sortedRows.map((row) => row.address).join("; "),
+          body,
+        };
+      })
+      .sort((a, b) => a.subCompany.localeCompare(b.subCompany) || a.to.localeCompare(b.to));
+
+    downloadCsv(`${month || "monthly"}-sub-work-order-email-drafts.csv`, [
+      [
+        "to",
+        "subCompany",
+        "subject",
+        "workOrderCount",
+        "expectedServices",
+        "workOrders",
+        "addresses",
+        "contractedAmount",
+        "body",
+      ],
+      ...drafts.map((draft) => [
+        draft.to,
+        draft.subCompany,
+        draft.subject,
+        draft.workOrderCount,
+        draft.expectedServices,
+        draft.workOrders,
+        draft.addresses,
+        "",
+        draft.body,
       ]),
     ]);
   }
@@ -951,6 +1070,9 @@ export default function MonthlyReportPage() {
                 </button>
                 <button type="button" onClick={exportInvoiceDetail} style={controlStyle}>
                   Export Detail CSV
+                </button>
+                <button type="button" onClick={exportWorkOrderEmailDrafts} style={controlStyle}>
+                  Export Work Order Email Drafts
                 </button>
               </div>
             </div>

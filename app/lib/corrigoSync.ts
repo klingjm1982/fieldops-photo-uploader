@@ -3,6 +3,7 @@ import { parseCorrigoWorkOrderEmail } from "@/app/lib/corrigoEmailParser";
 import { readServiceAccount } from "@/app/lib/googleServiceAccount";
 import {
   firstHeaderIndex,
+  isValidWorkOrderValue,
   quoteSheetTitle,
   workOrderSiteListTab,
 } from "@/app/lib/siteSubCompanyOverrides";
@@ -632,7 +633,9 @@ export async function getCorrigoSyncState(monthParam?: string) {
     .filter((group) => activeSiteIds.has(group.siteId))
     .filter((group) => {
       const workOrder = activeWorkOrders.find((row) => row.siteId === group.siteId);
-      return workOrder ? !queuedIds.has(queueIdFor(group, workOrder.workOrderNumber)) : false;
+      return workOrder && isValidWorkOrderValue(workOrder.workOrderNumber)
+        ? !queuedIds.has(queueIdFor(group, workOrder.workOrderNumber))
+        : false;
     });
 
   return {
@@ -751,9 +754,13 @@ export async function buildCorrigoQueue(monthParam?: string) {
       photoCount: group.photoCount,
       driveLinks: group.driveLinks.join("\n"),
       originalFilenames: group.originalFilenames.join("\n"),
-      status: "Pending Corrigo Upload",
+      status: isValidWorkOrderValue(workOrder.workOrderNumber)
+        ? "Pending Corrigo Upload"
+        : "Missing Work Order",
       attempts: 0,
-      lastError: "",
+      lastError: isValidWorkOrderValue(workOrder.workOrderNumber)
+        ? ""
+        : `Skipped: missing or invalid Corrigo work order number (${workOrder.workOrderNumber || "blank"}).`,
       uploadedAt: "",
       createdAt: now,
       updatedAt: now,
