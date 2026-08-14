@@ -17,6 +17,7 @@ export async function POST(request: Request) {
     const body = await request.json();
     const crewId = String(body.crewId ?? "").trim();
     const date = String(body.date ?? "").trim();
+    const startStopKey = String(body.startStopKey ?? "").trim();
     if (!crewId || crewId.length > 80) {
       return NextResponse.json({ message: "Enter a valid crew ID." }, { status: 400 });
     }
@@ -25,15 +26,18 @@ export async function POST(request: Request) {
     }
 
     const stops = await getCrewRouteStops(crewId, date);
-    const result = await optimizeCrewRoute(stops, date);
+    const result = await optimizeCrewRoute(stops, date, { startStopKey });
     await saveCrewRouteStopOrder(crewId, date, result.orderedStops);
 
     return NextResponse.json({
-      message: `Optimized ${result.orderedStops.length} stops from the Arlington warehouse.`,
+      message: startStopKey
+        ? `Optimized ${result.orderedStops.length} stops starting at the selected property.`
+        : `Optimized ${result.orderedStops.length} stops from the Arlington warehouse.`,
       stopCount: result.orderedStops.length,
       distanceMiles: result.distanceMiles,
       durationSeconds: result.durationSeconds,
       warehouseAddress: result.warehouseAddress,
+      startAddress: result.startAddress,
       stops: result.orderedStops.map((stop, index) => ({
         order: index + 1,
         jobName: stop.jobName,

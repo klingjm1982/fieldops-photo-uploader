@@ -1,4 +1,5 @@
 import type { CrewRouteStop } from "@/app/lib/crewRoutes";
+import { routeStopKey } from "@/app/lib/routeCompletion";
 
 const WAREHOUSE_ADDRESS = "1220 W. Arkansas Ln, Arlington, TX 76013";
 
@@ -40,13 +41,23 @@ function durationSeconds(value = "0s") {
   return Math.round(Number(value.replace(/s$/, "")) || 0);
 }
 
-export async function optimizeCrewRoute(stops: CrewRouteStop[], date: string) {
+export async function optimizeCrewRoute(stops: CrewRouteStop[], date: string, options: { startStopKey?: string } = {}) {
   const apiKey = process.env.GOOGLE_MAPS_API_KEY;
   if (!apiKey) throw new Error("GOOGLE_MAPS_API_KEY is not configured.");
   if (stops.length < 2) throw new Error("Add at least two active stops before optimizing.");
   if (stops.length > 25) throw new Error("Google waypoint optimization supports up to 25 stops per crew day.");
 
   const warehouseAddress = process.env.FIELDOPS_WAREHOUSE_ADDRESS || WAREHOUSE_ADDRESS;
+  const startStopKey = options.startStopKey?.trim() ?? "";
+  const lockedStart = startStopKey
+    ? stops.find((stop) => routeStopKey(stop.siteId, stop.address) === startStopKey)
+    : null;
+  if (startStopKey && !lockedStart) throw new Error("The selected starting property is no longer in this crew day.");
+  const optimizableStops = lockedStart
+    ? stops.filter((stop) => routeStopKey(stop.siteId, stop.address) !== startStopKey)
+    : stops;
+  const originAddress = lockedStart?.address || warehouseAddress;
+
   const response = await fetch("https://routes.googleapis.com/directions/v2:computeRoutes", {
     method: "POST",
     headers: {
@@ -56,9 +67,9 @@ export async function optimizeCrewRoute(stops: CrewRouteStop[], date: string) {
         "routes.optimizedIntermediateWaypointIndex,routes.distanceMeters,routes.duration",
     },
     body: JSON.stringify({
-      origin: { address: warehouseAddress },
+      origin: { address: originAddress },
       destination: { address: warehouseAddress },
-      intermediates: stops.map((stop) => ({ address: stop.address })),
+      intermediates: optimizableStops.map((stop) => ({ address: stop.address })),
       travelMode: "DRIVE",
       routingPreference: "TRAFFIC_AWARE",
       departureTime: departureTime(date, process.env.SERVICE_TIME_ZONE || "America/Chicago"),
@@ -74,14 +85,20 @@ export async function optimizeCrewRoute(stops: CrewRouteStop[], date: string) {
 
   const route = json.routes?.[0];
   const order = route?.optimizedIntermediateWaypointIndex;
-  if (!route || !order || order.length !== stops.length) {
+  if (!route || !order || order.length !== optimizableStops.length) {
     throw new Error("Google returned an incomplete optimized route.");
   }
 
+  const orderedStops = [
+    ...(lockedStart ? [lockedStart] : []),
+    ...order.map((originalIndex) => optimizableStops[originalIndex]),
+  ];
+
   return {
-    orderedStops: order.map((originalIndex) => stops[originalIndex]),
+    orderedStops,
     warehouseAddress,
     distanceMiles: Math.round(((route.distanceMeters || 0) / 1609.344) * 10) / 10,
     durationSeconds: durationSeconds(route.duration),
+    startAddress: lockedStart?.address || "",
   };
 }

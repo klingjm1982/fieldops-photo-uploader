@@ -15,6 +15,7 @@ type OptimizeResult = {
   distanceMiles: number;
   durationSeconds: number;
   warehouseAddress: string;
+  startAddress?: string;
   stops: Array<{ order: number; jobName: string; address: string }>;
 };
 
@@ -72,6 +73,7 @@ export default function RouteAdminPage() {
   const [progressMessage, setProgressMessage] = useState("");
   const [progressBusy, setProgressBusy] = useState(false);
   const [watchingProgress, setWatchingProgress] = useState(false);
+  const [startStopKey, setStartStopKey] = useState("");
 
   useEffect(() => {
     try {
@@ -163,7 +165,7 @@ export default function RouteAdminPage() {
           "Content-Type": "application/json",
           "x-fieldops-route-admin-secret": ownerPassword,
         },
-        body: JSON.stringify({ crewId, date: routeDate }),
+        body: JSON.stringify({ crewId, date: routeDate, startStopKey }),
       });
       const json = await response.json();
       if (!response.ok) throw new Error(json.message || "Could not optimize this route.");
@@ -228,6 +230,7 @@ export default function RouteAdminPage() {
                 setCrewId(event.target.value);
                 setWatchingProgress(false);
                 setLiveProgress(null);
+                setStartStopKey("");
               }}
               placeholder="north-dallas-1"
               className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3"
@@ -285,6 +288,7 @@ export default function RouteAdminPage() {
                 setRouteDate(event.target.value);
                 setWatchingProgress(false);
                 setLiveProgress(null);
+                setStartStopKey("");
               }}
               className="mt-2 w-full rounded-xl border border-slate-300 px-3 py-3"
             />
@@ -363,7 +367,7 @@ export default function RouteAdminPage() {
           <p className="text-xs font-bold uppercase tracking-[0.16em] text-blue-700">Traffic-aware routing</p>
           <h2 className="mt-2 text-2xl font-bold">Optimize a crew day</h2>
           <p className="mt-2 text-sm leading-6 text-slate-600">
-            Starts and ends at 1220 W. Arkansas Ln at 7:00 AM. Google will reorder the active Sheet rows for an efficient round trip based on predicted traffic, distance, and turns.
+            Starts at the warehouse unless you select a starting property below. Google will reorder the remaining active Sheet rows based on predicted traffic, distance, and turns.
           </p>
           <label className="mt-5 block text-sm font-semibold">
             Route date
@@ -375,10 +379,83 @@ export default function RouteAdminPage() {
                 setRouteDate(event.target.value);
                 setWatchingProgress(false);
                 setLiveProgress(null);
+                setStartStopKey("");
               }}
               className="mt-2 w-full rounded-xl border border-slate-300 px-3 py-3"
             />
           </label>
+          <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-sm font-black text-slate-900">Optional starting property</p>
+                <p className="mt-1 text-xs leading-5 text-slate-600">
+                  Pick a large or priority property to lock as Stop 1. The rest of the day optimizes after that stop.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => void loadProgress(false)}
+                disabled={progressBusy || !ownerPassword || !crewId || !routeDate}
+                className="shrink-0 rounded-xl bg-slate-950 px-3 py-2 text-xs font-bold text-white disabled:opacity-50"
+              >
+                {progressBusy ? "Loading..." : "Load stops"}
+              </button>
+            </div>
+
+            <label className="mt-3 block text-sm font-semibold">
+              Start route at
+              <select
+                value={startStopKey}
+                onChange={(event) => setStartStopKey(event.target.value)}
+                disabled={!liveProgress?.stops.length}
+                className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-3 py-3"
+              >
+                <option value="">Warehouse / optimizer decides</option>
+                {liveProgress?.stops.map((stop) => (
+                  <option key={stop.stopKey} value={stop.stopKey}>
+                    {stop.order}. {stop.jobName || stop.address}
+                    {stop.propertySize ? ` - ${stop.propertySize}` : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            {liveProgress?.stops.length ? (
+              <div className="mt-3 space-y-2">
+                {liveProgress.stops.map((stop) => (
+                  <button
+                    type="button"
+                    key={stop.stopKey}
+                    onClick={() => setStartStopKey(stop.stopKey)}
+                    className={`w-full rounded-xl border px-3 py-2 text-left text-sm ${
+                      startStopKey === stop.stopKey
+                        ? "border-blue-500 bg-blue-50 text-blue-950"
+                        : "border-slate-200 bg-white text-slate-700"
+                    }`}
+                  >
+                    <span className="font-black">Start here:</span>{" "}
+                    {stop.jobName || stop.address}
+                    {stop.propertySize && (
+                      <span className={`ml-2 rounded-full px-2 py-0.5 text-[10px] font-black uppercase ${
+                        stop.propertySize.toLowerCase() === "large"
+                          ? "bg-red-100 text-red-800"
+                          : stop.propertySize.toLowerCase() === "medium"
+                            ? "bg-amber-100 text-amber-800"
+                            : "bg-blue-100 text-blue-800"
+                      }`}>
+                        {stop.propertySize}
+                      </span>
+                    )}
+                    {stop.jobName && <span className="mt-1 block text-xs opacity-75">{stop.address}</span>}
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <p className="mt-3 text-xs text-slate-500">
+                Load stops after entering Crew ID, owner password, and route date.
+              </p>
+            )}
+          </div>
           <button
             type="button"
             onClick={optimizeRoute}
@@ -397,6 +474,11 @@ export default function RouteAdminPage() {
               <p className="text-sm font-semibold text-slate-700">
                 Estimated round trip: {optimizeResult.distanceMiles} miles · {Math.floor(optimizeResult.durationSeconds / 3600)}h {Math.round((optimizeResult.durationSeconds % 3600) / 60)}m driving
               </p>
+              {optimizeResult.startAddress && (
+                <p className="mt-2 rounded-xl bg-blue-50 p-3 text-sm font-semibold text-blue-900">
+                  Locked first stop: {optimizeResult.startAddress}
+                </p>
+              )}
               <ol className="mt-3 space-y-2 text-sm">
                 {optimizeResult.stops.map((stop) => (
                   <li key={`${stop.order}-${stop.address}`} className="rounded-xl bg-slate-100 p-3">
