@@ -167,6 +167,18 @@ function downloadCsv(filename: string, rows: unknown[][]) {
   URL.revokeObjectURL(url);
 }
 
+function downloadText(filename: string, text: string) {
+  const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
 function money(value: number) {
   return value.toFixed(2);
 }
@@ -532,30 +544,26 @@ export default function MonthlyReportPage() {
       })
       .sort((a, b) => a.subCompany.localeCompare(b.subCompany) || a.to.localeCompare(b.to));
 
-    downloadCsv(`${month || "monthly"}-sub-work-order-email-drafts.csv`, [
-      [
-        "to",
-        "subCompany",
-        "subject",
-        "workOrderCount",
-        "expectedServices",
-        "workOrders",
-        "addresses",
-        "contractedAmount",
-        "body",
-      ],
-      ...drafts.map((draft) => [
-        draft.to,
-        draft.subCompany,
-        draft.subject,
-        draft.workOrderCount,
-        draft.expectedServices,
-        draft.workOrders,
-        draft.addresses,
-        "",
-        draft.body,
-      ]),
-    ]);
+    const text = drafts.length > 0
+      ? drafts
+          .map((draft, index) =>
+            [
+              `EMAIL ${index + 1} OF ${drafts.length}`,
+              `Subcontractor: ${draft.subCompany}`,
+              `To: ${draft.to || "[add email address]"}`,
+              `Subject: ${draft.subject}`,
+              `Work orders: ${draft.workOrderCount}`,
+              `Expected services: ${draft.expectedServices}`,
+              "",
+              draft.body,
+              "",
+              "----------------------------------------",
+            ].join("\n")
+          )
+          .join("\n\n")
+      : "No valid work orders found for the current filters.";
+
+    downloadText(`${month || "monthly"}-sub-work-order-email-drafts.txt`, text);
   }
 
   function reminderPayload(rowsToSend = selectedReminderRows) {
@@ -1072,7 +1080,7 @@ export default function MonthlyReportPage() {
                   Export Detail CSV
                 </button>
                 <button type="button" onClick={exportWorkOrderEmailDrafts} style={controlStyle}>
-                  Export Work Order Email Drafts
+                  Export Email Draft Text
                 </button>
               </div>
             </div>
