@@ -275,7 +275,9 @@ async function osSearchCorrigoWorkOrder(
   clickSearchResult,
   searchResultWaitMs,
   workOrderOpenWaitMs,
-  pressEnterAfterSearch
+  pressEnterAfterSearch,
+  manualWorkOrderClick,
+  manualWorkOrderClickWaitMs
 ) {
   console.log(`Step 1: Enter work order number ${workOrder}.`);
   await run("cliclick", [`c:${searchPosition.x},${searchPosition.y}`]);
@@ -303,7 +305,12 @@ async function osSearchCorrigoWorkOrder(
   console.log(`Waiting ${Math.round(searchResultWaitMs / 1000)} second(s) for Corrigo search results.`);
   await new Promise((resolve) => setTimeout(resolve, searchResultWaitMs));
 
-  if (clickSearchResult) {
+  if (manualWorkOrderClick) {
+    console.log(
+      `Step 3: Manually click the work order result/card now. Waiting ${Math.round(manualWorkOrderClickWaitMs / 1000)} second(s) before Finder opens.`
+    );
+    await new Promise((resolve) => setTimeout(resolve, manualWorkOrderClickWaitMs));
+  } else if (clickSearchResult) {
     const resultPosition = searchResultPosition ?? fallbackSearchResultPosition(searchPosition);
     if (!searchResultPosition) {
       console.log(
@@ -451,6 +458,7 @@ async function main() {
   const uploadSettleMs = Number(argValue("upload-settle-ms") || "4000");
   const searchResultWaitMs = Number(argValue("search-result-wait-ms") || "3000");
   const workOrderOpenWaitMs = Number(argValue("work-order-open-wait-ms") || "6000");
+  const manualWorkOrderClickWaitMs = Number(argValue("manual-work-order-click-wait-ms") || "7000");
   const manualCorrigo = process.argv.includes("--manual-corrigo");
   const osSearch = process.argv.includes("--os-search");
   const allPending = process.argv.includes("--all-pending");
@@ -461,6 +469,7 @@ async function main() {
   const noClickSearchResult = process.argv.includes("--no-click-search-result");
   const noDismissBeforeSearch = process.argv.includes("--no-dismiss-before-search");
   const pressEnterAfterSearch = process.argv.includes("--press-enter-after-search");
+  const manualWorkOrderClick = process.argv.includes("--manual-work-order-click");
   const finderSelectedStart = process.argv.includes("--finder-selected-start");
   const autoDrag = process.argv.includes("--auto-drag");
   const closeFinderAfterDrag = process.argv.includes("--close-finder-after-drag");
@@ -617,7 +626,9 @@ async function main() {
             !noClickSearchResult,
             searchResultWaitMs,
             workOrderOpenWaitMs,
-            pressEnterAfterSearch
+            pressEnterAfterSearch,
+            manualWorkOrderClick,
+            manualWorkOrderClickWaitMs
           );
           if (!continuous) {
             await ask(`Continue after Corrigo work order ${row.workOrderNumber} is open. Press Enter here.`);

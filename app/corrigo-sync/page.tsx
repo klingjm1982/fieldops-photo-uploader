@@ -150,14 +150,14 @@ export default function CorrigoSyncPage() {
   const batchUploadCommand = useMemo(() => {
     return (
       `cd /Users/johnkling/fieldops-app && ` +
-      `npm run corrigo:upload-queue -- --month=${month} --all-pending --instant --os-search --use-last-drag --auto-drag --continuous --press-enter-after-search --search-result-wait-ms=3000 --work-order-open-wait-ms=6000 --upload-settle-ms=4000 --close-finder-after-drag --close-finder-delay-ms=5000 --max-photos-per-drag=10`
+      `npm run corrigo:upload-queue -- --month=${month} --all-pending --instant --os-search --use-last-drag --auto-drag --continuous --press-enter-after-search --manual-work-order-click --manual-work-order-click-wait-ms=7000 --search-result-wait-ms=3000 --work-order-open-wait-ms=6000 --upload-settle-ms=4000 --close-finder-after-drag --close-finder-delay-ms=5000 --max-photos-per-drag=10`
     );
   }, [month]);
 
   const recalibrateBatchUploadCommand = useMemo(() => {
     return (
       `cd /Users/johnkling/fieldops-app && ` +
-      `npm run corrigo:upload-queue -- --month=${month} --all-pending --os-search --use-last-drag --finder-selected-start --auto-drag --continuous --press-enter-after-search --search-result-wait-ms=3000 --work-order-open-wait-ms=6000 --upload-settle-ms=4000 --close-finder-after-drag --close-finder-delay-ms=5000 --recalibrate-drag --recalibrate-close --recalibrate-search-result --max-photos-per-drag=10`
+      `npm run corrigo:upload-queue -- --month=${month} --all-pending --os-search --use-last-drag --finder-selected-start --auto-drag --continuous --press-enter-after-search --manual-work-order-click --manual-work-order-click-wait-ms=7000 --search-result-wait-ms=3000 --work-order-open-wait-ms=6000 --upload-settle-ms=4000 --close-finder-after-drag --close-finder-delay-ms=5000 --recalibrate-drag --recalibrate-close --max-photos-per-drag=10`
     );
   }, [month]);
 
