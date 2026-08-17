@@ -277,7 +277,7 @@ async function osSearchCorrigoWorkOrder(
   workOrderOpenWaitMs,
   pressEnterAfterSearch
 ) {
-  console.log(`Searching Corrigo work order ${workOrder} using saved search position.`);
+  console.log(`Step 1: Enter work order number ${workOrder}.`);
   await run("cliclick", [`c:${searchPosition.x},${searchPosition.y}`]);
   await new Promise((resolve) => setTimeout(resolve, 250));
   await run("cliclick", [`c:${searchPosition.x},${searchPosition.y}`]);
@@ -291,7 +291,7 @@ async function osSearchCorrigoWorkOrder(
   ]);
 
   if (pressEnterAfterSearch) {
-    console.log("Pressing Enter after typing the work order.");
+    console.log("Step 2: Press Enter after typing the work order.");
     await run("osascript", [
       "-e",
       `tell application "System Events"
@@ -312,7 +312,7 @@ async function osSearchCorrigoWorkOrder(
     } else {
       console.log(`Opening Corrigo search result at ${resultPosition.x},${resultPosition.y}.`);
     }
-    console.log("Clicking the work order result/card to open the upload window.");
+    console.log("Step 3: Click the work order result/card to open the work order page.");
     await run("cliclick", [`c:${resultPosition.x},${resultPosition.y}`]);
     await new Promise((resolve) => setTimeout(resolve, 600));
     await run("cliclick", [`c:${resultPosition.x},${resultPosition.y}`]);
@@ -627,6 +627,7 @@ async function main() {
         }
         lastWorkOrder = row.workOrderNumber;
 
+        console.log(`Step 4: Open Finder for the photos for ${row.serviceDate}.`);
         console.log(`Preparing photos for ${row.serviceDate} after Corrigo work order is open...`);
         await runInheritedWithRetry(
           "npm",
@@ -659,7 +660,7 @@ async function main() {
         if (photoCount > uploadLimit) {
           console.log(`Corrigo limit: uploading the first ${uploadLimit} of ${photoCount} photo(s) for this service.`);
         }
-        console.log(`\nStarting OS drag for ${row.serviceDate}.`);
+        console.log(`\nStep 5: Drag photos into the work order for ${row.serviceDate}.`);
         const shouldUseSavedDrag = (useLastDrag || recalibrateDrag) && dragPositionCaptured;
         await runInheritedWithRetry(
           "npm",
@@ -703,7 +704,8 @@ async function main() {
           }
         }
 
-        if (osSearch && index < rows.length - 1) {
+        if (osSearch && closePosition) {
+          console.log("Step 6: Click off/close the current work order.");
           await closeCorrigoPopup(closePosition);
         }
       } catch (error) {
