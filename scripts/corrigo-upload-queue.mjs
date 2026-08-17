@@ -274,7 +274,8 @@ async function osSearchCorrigoWorkOrder(
   searchResultPosition,
   clickSearchResult,
   searchResultWaitMs,
-  workOrderOpenWaitMs
+  workOrderOpenWaitMs,
+  pressEnterAfterSearch
 ) {
   console.log(`Searching Corrigo work order ${workOrder} using saved search position.`);
   await run("cliclick", [`c:${searchPosition.x},${searchPosition.y}`]);
@@ -286,9 +287,18 @@ async function osSearchCorrigoWorkOrder(
     `tell application "System Events"
       keystroke "a" using command down
       keystroke "${String(workOrder).replaceAll('"', '\\"')}"
-      key code 36
     end tell`,
   ]);
+
+  if (pressEnterAfterSearch) {
+    await run("osascript", [
+      "-e",
+      `tell application "System Events"
+        key code 36
+      end tell`,
+    ]);
+  }
+
   console.log(`Waiting ${Math.round(searchResultWaitMs / 1000)} second(s) for Corrigo search results.`);
   await new Promise((resolve) => setTimeout(resolve, searchResultWaitMs));
 
@@ -301,6 +311,8 @@ async function osSearchCorrigoWorkOrder(
     } else {
       console.log(`Opening Corrigo search result at ${resultPosition.x},${resultPosition.y}.`);
     }
+    await run("cliclick", [`c:${resultPosition.x},${resultPosition.y}`]);
+    await new Promise((resolve) => setTimeout(resolve, 600));
     await run("cliclick", [`c:${resultPosition.x},${resultPosition.y}`]);
   }
 
@@ -446,6 +458,7 @@ async function main() {
   const recalibrateClose = process.argv.includes("--recalibrate-close");
   const noClickSearchResult = process.argv.includes("--no-click-search-result");
   const noDismissBeforeSearch = process.argv.includes("--no-dismiss-before-search");
+  const pressEnterAfterSearch = process.argv.includes("--press-enter-after-search");
   const finderSelectedStart = process.argv.includes("--finder-selected-start");
   const autoDrag = process.argv.includes("--auto-drag");
   const closeFinderAfterDrag = process.argv.includes("--close-finder-after-drag");
@@ -628,7 +641,8 @@ async function main() {
             searchResultPosition,
             !noClickSearchResult,
             searchResultWaitMs,
-            workOrderOpenWaitMs
+            workOrderOpenWaitMs,
+            pressEnterAfterSearch
           );
           if (!continuous) {
             await ask(`Continue after Corrigo work order ${row.workOrderNumber} is open. Press Enter here.`);
