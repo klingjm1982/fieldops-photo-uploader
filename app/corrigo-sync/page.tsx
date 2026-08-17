@@ -157,7 +157,7 @@ export default function CorrigoSyncPage() {
   const recalibrateBatchUploadCommand = useMemo(() => {
     return (
       `cd /Users/johnkling/fieldops-app && ` +
-      `npm run corrigo:upload-queue -- --month=${month} --all-pending --os-search --use-last-drag --finder-selected-start --auto-drag --continuous --upload-settle-ms=4000 --close-finder-after-drag --close-finder-delay-ms=5000 --recalibrate-drag --max-photos-per-drag=10`
+      `npm run corrigo:upload-queue -- --month=${month} --all-pending --os-search --use-last-drag --finder-selected-start --auto-drag --continuous --upload-settle-ms=4000 --close-finder-after-drag --close-finder-delay-ms=5000 --recalibrate-drag --recalibrate-search-result --max-photos-per-drag=10`
     );
   }, [month]);
 

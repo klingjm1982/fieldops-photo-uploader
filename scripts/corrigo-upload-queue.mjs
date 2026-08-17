@@ -7,9 +7,11 @@ import { promisify } from "node:util";
 import { chromium } from "playwright";
 
 const execFileAsync = promisify(execFile);
-const localApi = "http://localhost:3000/api/corrigo-sync";
+const localApi = process.env.CORRIGO_SYNC_API_URL || "http://127.0.0.1:3000/api/corrigo-sync";
 const searchPositionPath = path.join(process.cwd(), "corrigo-search-position.json");
+const searchResultPositionPath = path.join(process.cwd(), "corrigo-search-result-position.json");
 const closePositionPath = path.join(process.cwd(), "corrigo-close-position.json");
+const defaultProgressPath = path.join(process.cwd(), "corrigo-upload-progress.json");
 
 function argValue(name) {
   const prefix = `--${name}=`;
@@ -25,6 +27,10 @@ function safePathPart(value) {
     .slice(0, 80);
 }
 
+function hasValidWorkOrder(value) {
+  return /^\d{5,}$/.test(String(value ?? "").trim());
+}
+
 function readManifestQueueIds(manifestPath) {
   if (!manifestPath) return new Set();
   const parsed = JSON.parse(readFileSync(manifestPath, "utf8"));
@@ -34,6 +40,63 @@ function readManifestQueueIds(manifestPath) {
       .map((row) => String(row.queueId ?? row).trim())
       .filter(Boolean)
   );
+}
+
+function loadProgress(progressPath) {
+  if (!progressPath || !existsSync(progressPath)) {
+    return { completedQueueIds: [], failedQueueIds: [], events: [] };
+  }
+
+  const parsed = JSON.parse(readFileSync(progressPath, "utf8"));
+  return {
+    completedQueueIds: Array.isArray(parsed.completedQueueIds) ? parsed.completedQueueIds : [],
+    failedQueueIds: Array.isArray(parsed.failedQueueIds) ? parsed.failedQueueIds : [],
+    events: Array.isArray(parsed.events) ? parsed.events : [],
+  };
+}
+
+function saveProgress(progressPath, progress) {
+  if (!progressPath) return;
+  writeFileSync(
+    progressPath,
+    JSON.stringify(
+      {
+        ...progress,
+        updatedAt: new Date().toISOString(),
+      },
+      null,
+      2
+    )
+  );
+}
+
+function recordProgress(progressPath, progress, row, status, message = "") {
+  const queueId = String(row.queueId || "").trim();
+  const now = new Date().toISOString();
+  const completed = new Set(progress.completedQueueIds);
+  const failed = new Set(progress.failedQueueIds);
+
+  if (status === "completed") {
+    completed.add(queueId);
+    failed.delete(queueId);
+  } else if (status === "failed") {
+    failed.add(queueId);
+  }
+
+  progress.completedQueueIds = [...completed].filter(Boolean);
+  progress.failedQueueIds = [...failed].filter(Boolean);
+  progress.events = [
+    ...progress.events.slice(-200),
+    {
+      at: now,
+      queueId,
+      workOrder: row.workOrderNumber,
+      serviceDate: row.serviceDate,
+      status,
+      message,
+    },
+  ];
+  saveProgress(progressPath, progress);
 }
 
 async function ask(message) {
@@ -54,6 +117,23 @@ async function runInherited(command, args) {
       else reject(new Error(`${command} ${args.join(" ")} exited with ${signal ?? code}`));
     });
   });
+}
+
+async function runInheritedWithRetry(command, args, retries, label) {
+  let lastError = null;
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    try {
+      if (attempt > 0) {
+        console.log(`Retrying ${label} (${attempt}/${retries})...`);
+      }
+      await runInherited(command, args);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt < retries) await sleep(2000);
+    }
+  }
+  throw lastError;
 }
 
 async function run(command, args) {
@@ -81,6 +161,10 @@ function readSearchPosition() {
   return readPosition(searchPositionPath);
 }
 
+function readSearchResultPosition() {
+  return readPosition(searchResultPositionPath);
+}
+
 function readClosePosition() {
   return readPosition(closePositionPath);
 }
@@ -101,6 +185,10 @@ function readPosition(filePath) {
 
 function saveSearchPosition(position) {
   savePosition(searchPositionPath, position);
+}
+
+function saveSearchResultPosition(position) {
+  savePosition(searchResultPositionPath, position);
 }
 
 function saveClosePosition(position) {
@@ -140,8 +228,16 @@ async function captureSearchPosition() {
   return capturePosition("Corrigo's work order search box", saveSearchPosition);
 }
 
+async function captureSearchResultPosition() {
+  return capturePosition("the Corrigo work order search result/card", saveSearchResultPosition);
+}
+
 async function captureClosePosition() {
   return capturePosition("the X close button on the Corrigo work order popup", saveClosePosition);
+}
+
+function fallbackSearchResultPosition(searchPosition) {
+  return { x: searchPosition.x, y: searchPosition.y + 170 };
 }
 
 async function closeCorrigoPopup(closePosition) {
@@ -150,7 +246,7 @@ async function closeCorrigoPopup(closePosition) {
   await new Promise((resolve) => setTimeout(resolve, 1200));
 }
 
-async function osSearchCorrigoWorkOrder(workOrder, searchPosition) {
+async function osSearchCorrigoWorkOrder(workOrder, searchPosition, searchResultPosition, clickSearchResult) {
   console.log(`Searching Corrigo work order ${workOrder} using saved search position.`);
   await run("cliclick", [`c:${searchPosition.x},${searchPosition.y}`]);
   await new Promise((resolve) => setTimeout(resolve, 400));
@@ -162,7 +258,21 @@ async function osSearchCorrigoWorkOrder(workOrder, searchPosition) {
       key code 36
     end tell`,
   ]);
-  await new Promise((resolve) => setTimeout(resolve, 2500));
+  await new Promise((resolve) => setTimeout(resolve, 1200));
+
+  if (clickSearchResult) {
+    const resultPosition = searchResultPosition ?? fallbackSearchResultPosition(searchPosition);
+    if (!searchResultPosition) {
+      console.log(
+        `No saved search-result position found; clicking estimated result position ${resultPosition.x},${resultPosition.y}.`
+      );
+    } else {
+      console.log(`Opening Corrigo search result at ${resultPosition.x},${resultPosition.y}.`);
+    }
+    await run("cliclick", [`c:${resultPosition.x},${resultPosition.y}`]);
+  }
+
+  await new Promise((resolve) => setTimeout(resolve, 2200));
 }
 
 async function apiGet(month) {
@@ -186,13 +296,33 @@ async function apiGet(month) {
 }
 
 async function updateStatus(queueId, status, lastError = "") {
-  const res = await fetch(localApi, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action: "updateQueueStatus", queueId, status, lastError }),
-  });
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(json.message ?? `Status update failed with ${res.status}`);
+  const delays = [3000, 7000, 15000, 30000];
+
+  for (let attempt = 0; attempt <= delays.length; attempt += 1) {
+    const res = await fetch(localApi, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "updateQueueStatus", queueId, status, lastError }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (res.ok) return;
+
+    const error = new Error(json.message ?? `Status update failed with ${res.status}`);
+    if (!isQuotaError(error) || attempt === delays.length) throw error;
+
+    const delay = delays[attempt];
+    console.log(`Google Sheets quota hit while updating status. Waiting ${Math.round(delay / 1000)}s, then retrying.`);
+    await sleep(delay);
+  }
+}
+
+function formatDuration(ms) {
+  if (!Number.isFinite(ms) || ms <= 0) return "calculating";
+  const totalSeconds = Math.round(ms / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes <= 0) return `${seconds}s`;
+  return `${minutes}m ${seconds}s`;
 }
 
 async function findSearchInput(page) {
@@ -262,8 +392,13 @@ async function main() {
   const workOrder = argValue("work-order");
   const serviceDateArg = argValue("service-date") || argValue("service-dates");
   const manifestPath = argValue("manifest");
+  const progressPath = argValue("progress") || defaultProgressPath;
   const corrigoUrl = argValue("url") || "https://am-desktop.corrigopro.com";
   const limit = Number(argValue("limit") || "0");
+  const startAt = Math.max(0, Number(argValue("start-at") || "0"));
+  const stopAfterErrors = Math.max(0, Number(argValue("stop-after-errors") || "0"));
+  const prepareRetries = Math.max(0, Number(argValue("prepare-retries") || "1"));
+  const dragRetries = Math.max(0, Number(argValue("drag-retries") || "0"));
   const maxPhotosPerDrag = Number(argValue("max-photos-per-drag") || "10");
   const closeFinderDelayMs = Number(argValue("close-finder-delay-ms") || "5000");
   const uploadSettleMs = Number(argValue("upload-settle-ms") || "4000");
@@ -272,14 +407,21 @@ async function main() {
   const allPending = process.argv.includes("--all-pending");
   const useLastDrag = process.argv.includes("--use-last-drag");
   const recalibrateDrag = process.argv.includes("--recalibrate-drag");
+  const recalibrateSearchResult = process.argv.includes("--recalibrate-search-result");
+  const noClickSearchResult = process.argv.includes("--no-click-search-result");
   const finderSelectedStart = process.argv.includes("--finder-selected-start");
   const autoDrag = process.argv.includes("--auto-drag");
   const closeFinderAfterDrag = process.argv.includes("--close-finder-after-drag");
   const continuous = process.argv.includes("--continuous");
   const instant = process.argv.includes("--instant");
   const dryRun = process.argv.includes("--dry-run");
+  const resume = process.argv.includes("--resume");
+  const continueOnError = process.argv.includes("--continue-on-error");
+  const noStatusUpdate = process.argv.includes("--no-status-update");
 
   const manifestQueueIds = readManifestQueueIds(manifestPath);
+  const progress = loadProgress(progressPath);
+  const completedQueueIds = new Set(progress.completedQueueIds);
 
   if (!workOrder && !allPending && manifestQueueIds.size === 0) {
     throw new Error(
@@ -299,26 +441,51 @@ async function main() {
     .filter((row) => manifestQueueIds.size > 0 || row.status === "Pending Corrigo Upload")
     .filter((row) => manifestQueueIds.size > 0 || requestedDates.size > 0 || row.serviceDate.startsWith(`${month}-`))
     .filter((row) => requestedDates.size === 0 || requestedDates.has(row.serviceDate))
+    .filter((row) => !resume || !completedQueueIds.has(String(row.queueId || "").trim()))
     .sort((a, b) => {
       const dateCompare = a.serviceDate.localeCompare(b.serviceDate);
       if (dateCompare !== 0) return dateCompare;
       return a.workOrderNumber.localeCompare(b.workOrderNumber);
     });
 
+  if (startAt > 0) rows = rows.slice(startAt);
   if (limit > 0) rows = rows.slice(0, limit);
 
   if (rows.length === 0) {
-    console.log("No pending Corrigo queue rows matched that filter.");
+    console.log("No Corrigo queue rows matched that filter.");
+    if (resume) console.log(`Resume mode skipped ${completedQueueIds.size} completed row(s) from ${progressPath}.`);
     return;
   }
 
   console.log(`Found ${rows.length} matched row(s):`);
+  if (resume) console.log(`Resume mode enabled. Progress file: ${progressPath}`);
+  if (startAt > 0) console.log(`Starting after the first ${startAt} matched row(s).`);
   for (const row of rows) {
     console.log(`- WO ${row.workOrderNumber}, ${row.serviceDate}: ${row.photoCount} photo(s), ${row.address}`);
   }
 
+  if (dryRun) {
+    const totalPhotos = rows.reduce((sum, row) => sum + (Number(row.photoCount) || 0), 0);
+    const zeroPhotoRows = rows.filter((row) => (Number(row.photoCount) || 0) === 0).length;
+    const invalidWorkOrders = rows.filter((row) => !hasValidWorkOrder(row.workOrderNumber)).length;
+    const statuses = [...new Set(rows.map((row) => row.status || "Pending Corrigo Upload"))];
+    console.log(`Dry run only. ${rows.length} row(s), ${totalPhotos} photo(s), ${zeroPhotoRows} zero-photo row(s), ${invalidWorkOrders} invalid work-order row(s), statuses: ${statuses.join(", ")}`);
+    return;
+  }
+
   const rowsWithPhotos = [];
   for (const row of rows) {
+    if (!hasValidWorkOrder(row.workOrderNumber)) {
+      const message = `Skipped: missing or invalid Corrigo work order number (${row.workOrderNumber || "blank"}).`;
+      console.log(`\n${message}`);
+      if (!noStatusUpdate) {
+        await updateStatus(row.queueId, "Missing Work Order", message);
+        console.log(`Marked ${row.serviceDate} as Missing Work Order.`);
+      }
+      recordProgress(progressPath, progress, row, "failed", message);
+      continue;
+    }
+
     const photoCount = Number(row.photoCount) || 0;
     if (photoCount > 0) {
       rowsWithPhotos.push(row);
@@ -327,8 +494,11 @@ async function main() {
 
     const message = `Skipped: queue row has 0 photos/download links for ${row.serviceDate}.`;
     console.log(`\n${message}`);
-    await updateStatus(row.queueId, "No Photos Found", message);
-    console.log(`Marked WO ${row.workOrderNumber}, ${row.serviceDate} as No Photos Found.`);
+    if (!noStatusUpdate) {
+      await updateStatus(row.queueId, "No Photos Found", message);
+      console.log(`Marked WO ${row.workOrderNumber}, ${row.serviceDate} as No Photos Found.`);
+    }
+    recordProgress(progressPath, progress, row, "failed", message);
   }
 
   rows = rowsWithPhotos;
@@ -337,18 +507,16 @@ async function main() {
     return;
   }
 
-  if (dryRun) {
-    const totalPhotos = rows.reduce((sum, row) => sum + (Number(row.photoCount) || 0), 0);
-    const statuses = [...new Set(rows.map((row) => row.status || "Pending Corrigo Upload"))];
-    console.log(`Dry run only. ${rows.length} row(s), ${totalPhotos} photo(s), statuses: ${statuses.join(", ")}`);
-    return;
-  }
-
   const browser = manualCorrigo || osSearch ? null : await openCorrigo(corrigoUrl);
   const searchPosition = osSearch
     ? instant
       ? requireSavedPosition(readSearchPosition(), "Corrigo search", searchPositionPath)
       : readSearchPosition() ?? await captureSearchPosition()
+    : null;
+  const searchResultPosition = osSearch
+    ? recalibrateSearchResult
+      ? await captureSearchResultPosition()
+      : readSearchResultPosition()
     : null;
   const closePosition = osSearch
     ? instant
@@ -361,93 +529,139 @@ async function main() {
     await ask("Continue after the correct Corrigo work order popup is open. Press Enter here.");
   } else if (osSearch) {
     console.log("OS search mode enabled.");
-    console.log("Keep your real Corrigo Chrome window visible. The script will click the saved search box and type each work order.");
+    console.log("Keep your real Corrigo Chrome window visible. The script will click the saved search box, type each work order, and open the result card.");
   }
 
   try {
     let lastWorkOrder = "";
     let dragPositionCaptured = instant || !recalibrateDrag;
+    let errors = 0;
+    let uploaded = 0;
+    const startedAt = Date.now();
     for (const [index, row] of rows.entries()) {
-      console.log(`\nNext row: WO ${row.workOrderNumber}, ${row.serviceDate} (${row.photoCount} photo(s))`);
-
-      console.log(`Preparing ${row.serviceDate}...`);
-      await runInherited("npm", [
-        "run",
-        "corrigo:test-prepare",
-        "--",
-        `--month=${row.month || row.serviceDate.slice(0, 7)}`,
-        `--work-order=${row.workOrderNumber}`,
-        `--service-date=${row.serviceDate}`,
-        `--status=${row.status || "Pending Corrigo Upload"}`,
-      ]);
-
-      const preparedCount = preparedPhotoCount(row.workOrderNumber, row.serviceDate);
-      if (preparedCount === 0) {
-        const message = `Skipped: no downloadable photo files were prepared for ${row.serviceDate}.`;
-        console.log(message);
-        await updateStatus(row.queueId, "Photo Download Failed", message);
-        console.log(`Marked WO ${row.workOrderNumber}, ${row.serviceDate} as Photo Download Failed.`);
-        continue;
+      const rowLabel = `WO ${row.workOrderNumber}, ${row.serviceDate}`;
+      const elapsed = Date.now() - startedAt;
+      const completed = uploaded + errors;
+      const averageMs = completed > 0 ? elapsed / completed : 0;
+      const remaining = rows.length - index;
+      console.log(`\n[${index + 1}/${rows.length}] Next row: ${rowLabel} (${row.photoCount} photo(s))`);
+      if (completed > 0) {
+        console.log(`Progress: ${uploaded} uploaded, ${errors} error(s). ETA ${formatDuration(averageMs * remaining)}.`);
       }
 
-      if (manualCorrigo) {
-        if (row.workOrderNumber !== lastWorkOrder) {
-          await ask(`Search/open Corrigo work order ${row.workOrderNumber}, then press Enter here.`);
-        }
-      } else if (osSearch) {
-        await osSearchCorrigoWorkOrder(row.workOrderNumber, searchPosition);
-        if (!continuous) {
-          await ask(`Continue after Corrigo work order ${row.workOrderNumber} is open. Press Enter here.`);
-        }
-      } else {
-        await searchCorrigoWorkOrder(browser.page, row.workOrderNumber);
-      }
-      lastWorkOrder = row.workOrderNumber;
-
-      const photoCount = Number(row.photoCount) || 0;
-      const uploadLimit = maxPhotosPerDrag > 0 ? maxPhotosPerDrag : Math.max(photoCount, preparedCount);
-      if (photoCount > uploadLimit) {
-        console.log(`Corrigo limit: uploading the first ${uploadLimit} of ${photoCount} photo(s) for this service.`);
-      }
-      console.log(`\nStarting OS drag for ${row.serviceDate}.`);
-      const shouldUseSavedDrag = (useLastDrag || recalibrateDrag) && dragPositionCaptured;
-      await runInherited("npm", [
-        "run",
-        "corrigo:os-drag",
-        "--",
-        `--work-order=${row.workOrderNumber}`,
-        `--service-date=${row.serviceDate}`,
-        `--chunk-size=${uploadLimit}`,
-        "--chunk-index=0",
-        ...(finderSelectedStart ? ["--finder-selected-start"] : []),
-        ...(autoDrag ? ["--auto-drag"] : []),
-        ...(closeFinderAfterDrag ? ["--close-finder-after-drag"] : []),
-        ...(closeFinderAfterDrag ? [`--close-finder-delay-ms=${closeFinderDelayMs}`] : []),
-        ...(shouldUseSavedDrag ? ["--use-last"] : []),
-      ]);
-      dragPositionCaptured = true;
-
-      if (continuous) {
-        console.log(`Waiting ${Math.round(uploadSettleMs / 1000)} second(s), then marking uploaded.`);
-        await new Promise((resolve) => setTimeout(resolve, uploadSettleMs));
-        await updateStatus(row.queueId, "Uploaded to Corrigo");
-        console.log(`Marked ${row.serviceDate} Uploaded to Corrigo.`);
-      } else {
-        const confirmed = await ask(
-          `Did Corrigo show the uploaded photo bubbles for ${row.serviceDate}? Type YES to mark Uploaded to Corrigo: `
+      try {
+        console.log(`Preparing ${row.serviceDate}...`);
+        await runInheritedWithRetry(
+          "npm",
+          [
+            "run",
+            "corrigo:test-prepare",
+            "--",
+            `--month=${row.month || row.serviceDate.slice(0, 7)}`,
+            `--work-order=${row.workOrderNumber}`,
+            `--service-date=${row.serviceDate}`,
+            `--status=${row.status || "Pending Corrigo Upload"}`,
+          ],
+          prepareRetries,
+          `photo prepare for ${rowLabel}`
         );
-        if (confirmed.toUpperCase() === "YES") {
-          await updateStatus(row.queueId, "Uploaded to Corrigo");
-          console.log(`Marked ${row.serviceDate} Uploaded to Corrigo.`);
-        } else {
-          console.log(`Left ${row.serviceDate} pending.`);
-        }
-      }
 
-      if (osSearch && index < rows.length - 1) {
-        await closeCorrigoPopup(closePosition);
+        const preparedCount = preparedPhotoCount(row.workOrderNumber, row.serviceDate);
+        if (preparedCount === 0) {
+          const message = `Skipped: no downloadable photo files were prepared for ${row.serviceDate}.`;
+          console.log(message);
+          if (!noStatusUpdate) {
+            await updateStatus(row.queueId, "Photo Download Failed", message);
+            console.log(`Marked ${rowLabel} as Photo Download Failed.`);
+          }
+          throw new Error(message);
+        }
+
+        if (manualCorrigo) {
+          if (row.workOrderNumber !== lastWorkOrder) {
+            await ask(`Search/open Corrigo work order ${row.workOrderNumber}, then press Enter here.`);
+          }
+        } else if (osSearch) {
+          await osSearchCorrigoWorkOrder(row.workOrderNumber, searchPosition, searchResultPosition, !noClickSearchResult);
+          if (!continuous) {
+            await ask(`Continue after Corrigo work order ${row.workOrderNumber} is open. Press Enter here.`);
+          }
+        } else {
+          await searchCorrigoWorkOrder(browser.page, row.workOrderNumber);
+        }
+        lastWorkOrder = row.workOrderNumber;
+
+        const photoCount = Number(row.photoCount) || 0;
+        const uploadLimit = maxPhotosPerDrag > 0 ? maxPhotosPerDrag : Math.max(photoCount, preparedCount);
+        if (photoCount > uploadLimit) {
+          console.log(`Corrigo limit: uploading the first ${uploadLimit} of ${photoCount} photo(s) for this service.`);
+        }
+        console.log(`\nStarting OS drag for ${row.serviceDate}.`);
+        const shouldUseSavedDrag = (useLastDrag || recalibrateDrag) && dragPositionCaptured;
+        await runInheritedWithRetry(
+          "npm",
+          [
+            "run",
+            "corrigo:os-drag",
+            "--",
+            `--work-order=${row.workOrderNumber}`,
+            `--service-date=${row.serviceDate}`,
+            `--chunk-size=${uploadLimit}`,
+            "--chunk-index=0",
+            ...(finderSelectedStart ? ["--finder-selected-start"] : []),
+            ...(autoDrag ? ["--auto-drag"] : []),
+            ...(closeFinderAfterDrag ? ["--close-finder-after-drag"] : []),
+            ...(closeFinderAfterDrag ? [`--close-finder-delay-ms=${closeFinderDelayMs}`] : []),
+            ...(shouldUseSavedDrag ? ["--use-last"] : []),
+          ],
+          dragRetries,
+          `OS drag for ${rowLabel}`
+        );
+        dragPositionCaptured = true;
+
+        if (continuous) {
+          console.log(`Waiting ${Math.round(uploadSettleMs / 1000)} second(s), then marking uploaded.`);
+          await new Promise((resolve) => setTimeout(resolve, uploadSettleMs));
+          if (!noStatusUpdate) await updateStatus(row.queueId, "Uploaded to Corrigo");
+          console.log(`Marked ${row.serviceDate} Uploaded to Corrigo.`);
+          recordProgress(progressPath, progress, row, "completed");
+          uploaded += 1;
+        } else {
+          const confirmed = await ask(
+            `Did Corrigo show the uploaded photo bubbles for ${row.serviceDate}? Type YES to mark Uploaded to Corrigo: `
+          );
+          if (confirmed.toUpperCase() === "YES") {
+            if (!noStatusUpdate) await updateStatus(row.queueId, "Uploaded to Corrigo");
+            console.log(`Marked ${row.serviceDate} Uploaded to Corrigo.`);
+            recordProgress(progressPath, progress, row, "completed");
+            uploaded += 1;
+          } else {
+            console.log(`Left ${row.serviceDate} pending.`);
+          }
+        }
+
+        if (osSearch && index < rows.length - 1) {
+          await closeCorrigoPopup(closePosition);
+        }
+      } catch (error) {
+        errors += 1;
+        const message = error?.message ?? String(error);
+        console.error(`Failed ${rowLabel}: ${message}`);
+        recordProgress(progressPath, progress, row, "failed", message);
+        if (!continueOnError || (stopAfterErrors > 0 && errors >= stopAfterErrors)) {
+          throw error;
+        }
+        console.log("Continuing to the next row because --continue-on-error is enabled.");
+        if (osSearch && index < rows.length - 1) {
+          try {
+            await closeCorrigoPopup(closePosition);
+          } catch (closeError) {
+            console.log(`Could not close Corrigo popup after error: ${closeError?.message ?? closeError}`);
+          }
+        }
       }
     }
+    console.log(`\nMass upload run complete: ${uploaded} uploaded, ${errors} error(s).`);
   } finally {
     if (browser?.context) {
       const close = await ask("Close the Corrigo browser window? Type YES to close: ");
