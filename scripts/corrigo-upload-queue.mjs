@@ -277,7 +277,8 @@ async function osSearchCorrigoWorkOrder(
   workOrderOpenWaitMs,
   pressEnterAfterSearch,
   manualWorkOrderClick,
-  manualWorkOrderClickWaitMs
+  manualWorkOrderClickWaitMs,
+  recalibrateSearchResult
 ) {
   console.log(`Step 1: Enter work order number ${workOrder}.`);
   await run("cliclick", [`c:${searchPosition.x},${searchPosition.y}`]);
@@ -311,7 +312,9 @@ async function osSearchCorrigoWorkOrder(
     );
     await new Promise((resolve) => setTimeout(resolve, manualWorkOrderClickWaitMs));
   } else if (clickSearchResult) {
-    const resultPosition = searchResultPosition ?? fallbackSearchResultPosition(searchPosition);
+    const resultPosition = recalibrateSearchResult
+      ? await captureSearchResultPosition()
+      : searchResultPosition ?? fallbackSearchResultPosition(searchPosition);
     if (!searchResultPosition) {
       console.log(
         `No saved search-result position found; clicking estimated result position ${resultPosition.x},${resultPosition.y}.`
@@ -576,9 +579,7 @@ async function main() {
       : readSearchPosition() ?? await captureSearchPosition()
     : null;
   const searchResultPosition = osSearch
-    ? recalibrateSearchResult
-      ? await captureSearchResultPosition()
-      : readSearchResultPosition()
+    ? readSearchResultPosition()
     : null;
   const closePosition = osSearch
     ? recalibrateClose
@@ -629,7 +630,8 @@ async function main() {
             workOrderOpenWaitMs,
             pressEnterAfterSearch,
             manualWorkOrderClick,
-            manualWorkOrderClickWaitMs
+            manualWorkOrderClickWaitMs,
+            recalibrateSearchResult
           );
           if (!continuous) {
             await ask(`Continue after Corrigo work order ${row.workOrderNumber} is open. Press Enter here.`);
