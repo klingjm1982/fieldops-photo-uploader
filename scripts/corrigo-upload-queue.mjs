@@ -268,7 +268,14 @@ async function dismissCorrigoPopup(closePosition) {
   await new Promise((resolve) => setTimeout(resolve, 500));
 }
 
-async function osSearchCorrigoWorkOrder(workOrder, searchPosition, searchResultPosition, clickSearchResult) {
+async function osSearchCorrigoWorkOrder(
+  workOrder,
+  searchPosition,
+  searchResultPosition,
+  clickSearchResult,
+  searchResultWaitMs,
+  workOrderOpenWaitMs
+) {
   console.log(`Searching Corrigo work order ${workOrder} using saved search position.`);
   await run("cliclick", [`c:${searchPosition.x},${searchPosition.y}`]);
   await new Promise((resolve) => setTimeout(resolve, 250));
@@ -282,7 +289,8 @@ async function osSearchCorrigoWorkOrder(workOrder, searchPosition, searchResultP
       key code 36
     end tell`,
   ]);
-  await new Promise((resolve) => setTimeout(resolve, 1200));
+  console.log(`Waiting ${Math.round(searchResultWaitMs / 1000)} second(s) for Corrigo search results.`);
+  await new Promise((resolve) => setTimeout(resolve, searchResultWaitMs));
 
   if (clickSearchResult) {
     const resultPosition = searchResultPosition ?? fallbackSearchResultPosition(searchPosition);
@@ -296,7 +304,8 @@ async function osSearchCorrigoWorkOrder(workOrder, searchPosition, searchResultP
     await run("cliclick", [`c:${resultPosition.x},${resultPosition.y}`]);
   }
 
-  await new Promise((resolve) => setTimeout(resolve, 2200));
+  console.log(`Waiting ${Math.round(workOrderOpenWaitMs / 1000)} second(s) for Corrigo work order upload panel.`);
+  await new Promise((resolve) => setTimeout(resolve, workOrderOpenWaitMs));
 }
 
 async function apiGet(month) {
@@ -426,6 +435,8 @@ async function main() {
   const maxPhotosPerDrag = Number(argValue("max-photos-per-drag") || "10");
   const closeFinderDelayMs = Number(argValue("close-finder-delay-ms") || "5000");
   const uploadSettleMs = Number(argValue("upload-settle-ms") || "4000");
+  const searchResultWaitMs = Number(argValue("search-result-wait-ms") || "3000");
+  const workOrderOpenWaitMs = Number(argValue("work-order-open-wait-ms") || "6000");
   const manualCorrigo = process.argv.includes("--manual-corrigo");
   const osSearch = process.argv.includes("--os-search");
   const allPending = process.argv.includes("--all-pending");
@@ -611,7 +622,14 @@ async function main() {
           }
         } else if (osSearch) {
           if (!noDismissBeforeSearch) await dismissCorrigoPopup(index > 0 ? closePosition : null);
-          await osSearchCorrigoWorkOrder(row.workOrderNumber, searchPosition, searchResultPosition, !noClickSearchResult);
+          await osSearchCorrigoWorkOrder(
+            row.workOrderNumber,
+            searchPosition,
+            searchResultPosition,
+            !noClickSearchResult,
+            searchResultWaitMs,
+            workOrderOpenWaitMs
+          );
           if (!continuous) {
             await ask(`Continue after Corrigo work order ${row.workOrderNumber} is open. Press Enter here.`);
           }
