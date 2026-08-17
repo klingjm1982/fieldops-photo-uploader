@@ -291,6 +291,7 @@ async function osSearchCorrigoWorkOrder(
   ]);
 
   if (pressEnterAfterSearch) {
+    console.log("Pressing Enter after typing the work order.");
     await run("osascript", [
       "-e",
       `tell application "System Events"
@@ -311,6 +312,7 @@ async function osSearchCorrigoWorkOrder(
     } else {
       console.log(`Opening Corrigo search result at ${resultPosition.x},${resultPosition.y}.`);
     }
+    console.log("Clicking the work order result/card to open the upload window.");
     await run("cliclick", [`c:${resultPosition.x},${resultPosition.y}`]);
     await new Promise((resolve) => setTimeout(resolve, 600));
     await run("cliclick", [`c:${resultPosition.x},${resultPosition.y}`]);
