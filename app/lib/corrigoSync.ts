@@ -201,6 +201,20 @@ function dateOnlyParts(value: string) {
   return { month: `${match[1]}-${match[2]}`, date: `${match[1]}-${match[2]}-${match[3]}` };
 }
 
+function normalizeMonthValue(value: string, timeZone = process.env.SERVICE_TIME_ZONE || "America/Chicago") {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+
+  const monthOnly = trimmed.match(/^(20\d{2})-([01]\d)$/);
+  if (monthOnly) return `${monthOnly[1]}-${monthOnly[2]}`;
+
+  const dateOnly = dateOnlyParts(trimmed);
+  if (dateOnly) return dateOnly.month;
+
+  const localDate = localDateParts(trimmed, timeZone);
+  return localDate?.month ?? trimmed;
+}
+
 function currentMonth(timeZone: string) {
   const now = new Date();
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -355,7 +369,7 @@ function parseWorkOrders(rows: unknown[][]): CorrigoWorkOrder[] {
 
   const parsed = body
     .map((row) => ({
-      month: cell(row, monthIdx),
+      month: normalizeMonthValue(cell(row, monthIdx)),
       siteId: cell(row, siteIdx),
       address: cell(row, addressIdx),
       workOrderNumber: cell(row, workOrderIdx),
@@ -383,7 +397,7 @@ function parseQueue(rows: unknown[][]): CorrigoQueueRow[] {
   return body
     .map((row) => ({
       queueId: cell(row, headerIndex(headers, ["queueId"], 0)),
-      month: cell(row, headerIndex(headers, ["month"], 1)),
+      month: normalizeMonthValue(cell(row, headerIndex(headers, ["month"], 1))),
       siteId: cell(row, headerIndex(headers, ["siteId"], 2)),
       address: cell(row, headerIndex(headers, ["address"], 3)),
       serviceDate: cell(row, headerIndex(headers, ["serviceDate"], 4)),
