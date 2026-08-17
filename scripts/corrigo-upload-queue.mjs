@@ -243,11 +243,35 @@ function fallbackSearchResultPosition(searchPosition) {
 async function closeCorrigoPopup(closePosition) {
   console.log("Closing the current Corrigo work order popup.");
   await run("cliclick", [`c:${closePosition.x},${closePosition.y}`]);
-  await new Promise((resolve) => setTimeout(resolve, 1200));
+  await new Promise((resolve) => setTimeout(resolve, 700));
+  await pressEscape();
+  await new Promise((resolve) => setTimeout(resolve, 500));
+}
+
+async function pressEscape() {
+  await run("osascript", [
+    "-e",
+    `tell application "System Events"
+      key code 53
+    end tell`,
+  ]);
+}
+
+async function dismissCorrigoPopup(closePosition) {
+  if (closePosition) {
+    console.log("Dismissing any open Corrigo work order popup before searching.");
+    await run("cliclick", [`c:${closePosition.x},${closePosition.y}`]);
+    await new Promise((resolve) => setTimeout(resolve, 700));
+  }
+
+  await pressEscape();
+  await new Promise((resolve) => setTimeout(resolve, 500));
 }
 
 async function osSearchCorrigoWorkOrder(workOrder, searchPosition, searchResultPosition, clickSearchResult) {
   console.log(`Searching Corrigo work order ${workOrder} using saved search position.`);
+  await run("cliclick", [`c:${searchPosition.x},${searchPosition.y}`]);
+  await new Promise((resolve) => setTimeout(resolve, 250));
   await run("cliclick", [`c:${searchPosition.x},${searchPosition.y}`]);
   await new Promise((resolve) => setTimeout(resolve, 400));
   await run("osascript", [
@@ -408,7 +432,9 @@ async function main() {
   const useLastDrag = process.argv.includes("--use-last-drag");
   const recalibrateDrag = process.argv.includes("--recalibrate-drag");
   const recalibrateSearchResult = process.argv.includes("--recalibrate-search-result");
+  const recalibrateClose = process.argv.includes("--recalibrate-close");
   const noClickSearchResult = process.argv.includes("--no-click-search-result");
+  const noDismissBeforeSearch = process.argv.includes("--no-dismiss-before-search");
   const finderSelectedStart = process.argv.includes("--finder-selected-start");
   const autoDrag = process.argv.includes("--auto-drag");
   const closeFinderAfterDrag = process.argv.includes("--close-finder-after-drag");
@@ -519,7 +545,9 @@ async function main() {
       : readSearchResultPosition()
     : null;
   const closePosition = osSearch
-    ? instant
+    ? recalibrateClose
+      ? await captureClosePosition()
+      : instant
       ? requireSavedPosition(readClosePosition(), "Corrigo close", closePositionPath)
       : readClosePosition() ?? await captureClosePosition()
     : null;
@@ -582,6 +610,7 @@ async function main() {
             await ask(`Search/open Corrigo work order ${row.workOrderNumber}, then press Enter here.`);
           }
         } else if (osSearch) {
+          if (!noDismissBeforeSearch) await dismissCorrigoPopup(index > 0 ? closePosition : null);
           await osSearchCorrigoWorkOrder(row.workOrderNumber, searchPosition, searchResultPosition, !noClickSearchResult);
           if (!continuous) {
             await ask(`Continue after Corrigo work order ${row.workOrderNumber} is open. Press Enter here.`);
