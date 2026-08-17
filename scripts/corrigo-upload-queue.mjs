@@ -604,7 +604,30 @@ async function main() {
       }
 
       try {
-        console.log(`Preparing ${row.serviceDate}...`);
+        if (manualCorrigo) {
+          if (row.workOrderNumber !== lastWorkOrder) {
+            await ask(`Search/open Corrigo work order ${row.workOrderNumber}, then press Enter here.`);
+          }
+        } else if (osSearch) {
+          if (!noDismissBeforeSearch) await dismissCorrigoPopup(index > 0 ? closePosition : null);
+          await osSearchCorrigoWorkOrder(
+            row.workOrderNumber,
+            searchPosition,
+            searchResultPosition,
+            !noClickSearchResult,
+            searchResultWaitMs,
+            workOrderOpenWaitMs,
+            pressEnterAfterSearch
+          );
+          if (!continuous) {
+            await ask(`Continue after Corrigo work order ${row.workOrderNumber} is open. Press Enter here.`);
+          }
+        } else {
+          await searchCorrigoWorkOrder(browser.page, row.workOrderNumber);
+        }
+        lastWorkOrder = row.workOrderNumber;
+
+        console.log(`Preparing photos for ${row.serviceDate} after Corrigo work order is open...`);
         await runInheritedWithRetry(
           "npm",
           [
@@ -630,29 +653,6 @@ async function main() {
           }
           throw new Error(message);
         }
-
-        if (manualCorrigo) {
-          if (row.workOrderNumber !== lastWorkOrder) {
-            await ask(`Search/open Corrigo work order ${row.workOrderNumber}, then press Enter here.`);
-          }
-        } else if (osSearch) {
-          if (!noDismissBeforeSearch) await dismissCorrigoPopup(index > 0 ? closePosition : null);
-          await osSearchCorrigoWorkOrder(
-            row.workOrderNumber,
-            searchPosition,
-            searchResultPosition,
-            !noClickSearchResult,
-            searchResultWaitMs,
-            workOrderOpenWaitMs,
-            pressEnterAfterSearch
-          );
-          if (!continuous) {
-            await ask(`Continue after Corrigo work order ${row.workOrderNumber} is open. Press Enter here.`);
-          }
-        } else {
-          await searchCorrigoWorkOrder(browser.page, row.workOrderNumber);
-        }
-        lastWorkOrder = row.workOrderNumber;
 
         const photoCount = Number(row.photoCount) || 0;
         const uploadLimit = maxPhotosPerDrag > 0 ? maxPhotosPerDrag : Math.max(photoCount, preparedCount);
