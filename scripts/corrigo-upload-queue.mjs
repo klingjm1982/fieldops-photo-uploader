@@ -471,6 +471,7 @@ async function main() {
   const pressEnterAfterSearch = process.argv.includes("--press-enter-after-search");
   const manualWorkOrderClick = process.argv.includes("--manual-work-order-click");
   const finderSelectedStart = process.argv.includes("--finder-selected-start");
+  const manualSelectFiles = process.argv.includes("--manual-select-files");
   const autoDrag = process.argv.includes("--auto-drag");
   const closeFinderAfterDrag = process.argv.includes("--close-finder-after-drag");
   const continuous = process.argv.includes("--continuous");
@@ -671,7 +672,7 @@ async function main() {
         if (photoCount > uploadLimit) {
           console.log(`Corrigo limit: uploading the first ${uploadLimit} of ${photoCount} photo(s) for this service.`);
         }
-        console.log(`\nStep 5: Drag photos into the work order for ${row.serviceDate}.`);
+        console.log(`\nStep 6: Drag photos into the work order for ${row.serviceDate}.`);
         const shouldUseSavedDrag = (useLastDrag || recalibrateDrag) && dragPositionCaptured;
         await runInheritedWithRetry(
           "npm",
@@ -684,6 +685,7 @@ async function main() {
             `--chunk-size=${uploadLimit}`,
             "--chunk-index=0",
             ...(finderSelectedStart ? ["--finder-selected-start"] : []),
+            ...(manualSelectFiles ? ["--manual-select-files", "--finder-selected-start"] : []),
             ...(autoDrag ? ["--auto-drag"] : []),
             ...(closeFinderAfterDrag ? ["--close-finder-after-drag"] : []),
             ...(closeFinderAfterDrag ? [`--close-finder-delay-ms=${closeFinderDelayMs}`] : []),
@@ -716,7 +718,7 @@ async function main() {
         }
 
         if (osSearch && closePosition) {
-          console.log("Step 6: Click off/close the current work order.");
+          console.log("Step 7: Click off/close the current work order.");
           await closeCorrigoPopup(closePosition);
         }
       } catch (error) {

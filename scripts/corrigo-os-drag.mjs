@@ -111,6 +111,18 @@ async function selectFinderFiles(preparedDir, files) {
   await run("osascript", ["-e", script]);
 }
 
+async function openFinderFolder(preparedDir) {
+  const script = `
+    set folderPath to POSIX file "${preparedDir.replaceAll('"', '\\"')}" as alias
+    tell application "Finder"
+      activate
+      open folderPath
+      delay 0.5
+    end tell
+  `;
+  await run("osascript", ["-e", script]);
+}
+
 async function closeFrontFinderWindow() {
   const script = `
     tell application "Finder"
@@ -159,6 +171,7 @@ async function main() {
   const serviceDate = argValue("service-date");
   const useLast = hasArg("use-last");
   const finderSelectedStart = hasArg("finder-selected-start");
+  const manualSelectFiles = hasArg("manual-select-files");
   const autoDrag = hasArg("auto-drag");
   const closeFinderAfterDrag = hasArg("close-finder-after-drag");
   const closeFinderDelayMs = Number(argValue("close-finder-delay-ms") || "5000");
@@ -184,7 +197,13 @@ async function main() {
   console.log(`Files selected for ${serviceDate}:`);
   for (const file of files) console.log(`- ${file}`);
 
-  await selectFinderFiles(preparedDir, files);
+  if (manualSelectFiles) {
+    await openFinderFolder(preparedDir);
+    console.log("\nStep 5: Select the photos in Finder, then press Enter here.");
+    await ask("Continue after the correct photos are selected in Finder.");
+  } else {
+    await selectFinderFiles(preparedDir, files);
+  }
 
   console.log("\nFinder should now be open with the correct files selected.");
   console.log("Keep Corrigo visible beside Finder, like your video.");
