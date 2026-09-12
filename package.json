@@ -11,6 +11,7 @@
     "corrigo:test-browser": "node scripts/corrigo-browser-test.mjs",
     "corrigo:os-drag": "node scripts/corrigo-os-drag.mjs",
     "corrigo:upload-queue": "node scripts/corrigo-upload-queue.mjs",
+    "corrigo:retry": "node scripts/corrigo-retry-work-orders.mjs",
     "corrigo:mass-upload": "node scripts/corrigo-upload-queue.mjs --all-pending --instant --os-search --use-last-drag --auto-drag --continuous --continue-on-error --resume --close-finder-after-drag --close-finder-delay-ms=5000 --upload-settle-ms=4000 --max-photos-per-drag=0"
   },
   "dependencies": {
