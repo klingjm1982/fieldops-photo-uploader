@@ -185,7 +185,11 @@ export async function uploadServiceChannelWorkOrderAttachment(params: {
   }
 
   const form = new FormData();
-  const blob = new Blob([params.bytes], { type: params.mimeType || "application/octet-stream" });
+  const bytesCopy = new Uint8Array(params.bytes.byteLength);
+  bytesCopy.set(params.bytes);
+  const blob = new Blob([bytesCopy.buffer], {
+    type: params.mimeType || "application/octet-stream",
+  });
   form.append("file", blob, params.filename);
 
   const response = await scFetch(
